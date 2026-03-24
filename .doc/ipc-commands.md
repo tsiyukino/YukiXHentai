@@ -18,7 +18,7 @@
 ## sync_galleries
 - **Signature:** `invoke("sync_galleries", { depth? }) -> SyncResult`
 - **Used by:** `GalleryGrid.svelte` sync button
-- **Notes:** Multi-page sync. Fetches `depth` listing pages sequentially (default 10, max 50) with rate limiting. Downloads thumbnails sequentially with adaptive throttling (200ms base delay, 10s timeout, 30s backoff after 3 consecutive failures). Emits `sync-progress` Tauri events during sync. Returns total galleries synced.
+- **Notes:** Multi-page sync. Fetches `depth` listing pages sequentially (default 10, max 50) with rate limiting. Downloads thumbnails concurrently (up to 6 — matches JHentai/EhViewer safe limit for ehgt.org) with adaptive throttling (10s timeout, 30s backoff after 3 consecutive failures). Emits `sync-progress` Tauri events during sync. Returns total galleries synced.
 
 ## sync_next_page
 - **Signature:** `invoke("sync_next_page") -> SyncPageResult { galleries: Gallery[], has_more: bool }`
@@ -29,7 +29,7 @@
 - **Signature:** `invoke("download_thumbnails_for_gids", { gids: number[] }) -> number`
 - **Used by:** `GalleryGrid.svelte` (viewport-driven thumbnail loading)
 - **Events emitted:** `thumbnail-ready` (per thumbnail, as each download completes)
-- **Notes:** Downloads thumbnails for the specified gallery gids. Looks up galleries from DB to get thumb_urls. Spawns sequential download in background (IPC returns immediately). Skips already-cached thumbnails (verified on disk with nonzero size). Uses adaptive throttling: 200ms base delay, 10s per-request timeout, 30s pause after 3 consecutive failures. Frontend calls this with only the gids visible in the virtual scroll viewport, debounced at 150ms.
+- **Notes:** Downloads thumbnails for the specified gallery gids. Looks up galleries from DB to get thumb_urls. Spawns concurrent download in background (IPC returns immediately). Skips already-cached thumbnails (verified on disk with nonzero size). Up to 6 concurrent downloads (semaphore — matches JHentai/EhViewer safe limit for ehgt.org), 10s per-request timeout. Shared pause flag suspends new launches on rate-limit (10s) or 3 consecutive failures (30s). Frontend calls this with only the gids visible in the virtual scroll viewport, debounced at 150ms.
 
 ## reset_sync_cursor
 - **Signature:** `invoke("reset_sync_cursor") -> void`

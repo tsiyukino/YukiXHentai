@@ -66,20 +66,22 @@
 - `requestedThumbGids` set prevents re-requesting thumbnails already in-flight.
 - This means loading 400 galleries but only viewing 100 results in ~100 thumbnail downloads, not 400.
 
-## Gallery thumbnail throttling (`download_thumbs_sequential`)
-- Downloads are **sequential** (one at a time) — no concurrency.
-- **200ms base delay** between requests.
-- **10s timeout** per HTTP request — prevents silent hangs from ExHentai throttling.
+## Gallery thumbnail concurrency (`download_thumbs_sequential`)
+- Downloads are **concurrent** up to `THUMB_CONCURRENCY` (6) in flight simultaneously — matches JHentai/EhViewer observed safe concurrency limit for `ehgt.org`.
+- `tokio::task::JoinSet` spawns one task per thumbnail; a `tokio::sync::Semaphore(20)` caps concurrency.
+- Shared `Arc<AtomicBool>` pause flag: when set, the launch loop spins (100ms polls) before acquiring the next permit. Set by any task that receives a rate-limit or backoff trigger.
+- Shared `Arc<Mutex<u32>>` consecutive-failure counter across all tasks.
+- **10s timeout** per HTTP request.
 - **No retries** on individual failures — the frontend can re-request on next scroll.
-- **Adaptive backoff** on error/timeout: delay increases to 2s for the next 10 downloads.
-- **3 consecutive failures** → 30s pause, then resume with 500ms delay for 10 downloads.
-- **429/503/509 responses** → 10s immediate pause + 2s delay for next 10 downloads.
+- **3 consecutive failures** → 30s pause (pause flag set for duration).
+- **429/503/509 responses** → 10s pause (pause flag set for duration).
 - **Content-type validation**: rejects non-`image/*` responses.
-- **Diagnostic logging**: `THUMB_DOWNLOAD`, `THUMB_SUCCESS`, `THUMB_FAIL`, `THUMB_TIMEOUT`, `THUMB_RATE_LIMITED`, `THUMB_WRONG_TYPE`, `THUMB_SAVE_REJECTED`, `THUMB_BACKOFF`, `THUMB_BATCH`, `THUMB_BATCH_DONE`, `THUMB_COOLDOWN_END`.
+- Function signature takes `Arc<DbState>` (not `&DbState`) so tasks can clone the Arc without unsafe code.
+- **Diagnostic logging**: `THUMB_DOWNLOAD`, `THUMB_SUCCESS`, `THUMB_FAIL`, `THUMB_TIMEOUT`, `THUMB_RATE_LIMITED`, `THUMB_WRONG_TYPE`, `THUMB_SAVE_REJECTED`, `THUMB_BACKOFF`, `THUMB_BATCH`, `THUMB_BATCH_DONE`.
 
 ## Page thumbnail concurrency
-- Frontend fires up to **20 concurrent** `get_page_thumbnail` requests per batch.
-- CDN thumbnails (ehgt.org) are not rate-limited — no backend semaphore needed.
+- Frontend fires up to **6 concurrent** `get_page_thumbnail` requests per batch via `pageThumbs.ts` service.
+- Concurrency capped at 6 to match JHentai/EhViewer safe limit for `ehgt.org`.
 - Full-size reader images remain at 3 concurrent (ImageDownloadQueue semaphore).
 
 ## Frontend display

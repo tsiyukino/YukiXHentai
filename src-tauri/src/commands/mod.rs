@@ -169,8 +169,8 @@ pub async fn sync_gallery_page(
         db_state.upsert_gallery_browse(gallery)?;
     }
 
-    // Download thumbnails sequentially with adaptive throttling.
-    download_thumbs_sequential(&client, &listing.galleries, &db_state, &thumb_cache, None).await;
+    // Download thumbnails concurrently with adaptive throttling.
+    download_thumbs_sequential(&client, &listing.galleries, Arc::clone(&db_state), &thumb_cache, None).await;
 
     Ok(SyncResult {
         galleries_synced: count,
@@ -183,22 +183,26 @@ pub async fn sync_gallery_page(
     })
 }
 
-/// Download thumbnails sequentially with adaptive throttling.
-/// Processes downloads one-at-a-time from a queue with adaptive delays.
+/// Download thumbnails concurrently (up to THUMB_CONCURRENCY in flight).
 /// If `app` is provided, emits "thumbnail-ready" events as each completes.
 /// Returns the number of thumbnails successfully downloaded.
 async fn download_thumbs_sequential(
     client: &reqwest::Client,
     galleries: &[Gallery],
-    db_state: &DbState,
+    db_state: Arc<DbState>,
     thumb_cache: &ThumbCache,
     app: Option<&AppHandle>,
 ) -> usize {
     use crate::models::ThumbnailReadyEvent;
+    use tokio::sync::Semaphore;
+    use tokio::task::JoinSet;
 
-    let to_download: Vec<_> = galleries
+    const THUMB_CONCURRENCY: usize = 6;
+
+    let to_download: Vec<(i64, String)> = galleries
         .iter()
         .filter(|g| !g.thumb_url.is_empty() && !thumb_cache.exists_valid(g.gid))
+        .map(|g| (g.gid, g.thumb_url.clone()))
         .collect();
 
     tracing::info!(
@@ -212,168 +216,174 @@ async fn download_thumbs_sequential(
         return 0;
     }
 
-    let mut downloaded = 0usize;
-    let mut rejected = 0usize;
-    let mut consecutive_failures = 0u32;
-    let mut base_delay_ms = 200u64;
-    let mut cooldown_remaining = 0u32; // downloads remaining at elevated delay
+    let semaphore = Arc::new(Semaphore::new(THUMB_CONCURRENCY));
+    // When set, the launch loop pauses before starting new downloads.
+    let pause_flag = Arc::new(AtomicBool::new(false));
+    // Shared consecutive-failure counter across all tasks.
+    let consec_failures: Arc<Mutex<u32>> = Arc::new(Mutex::new(0));
+    let downloaded: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
+    let rejected: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
 
-    for gallery in &to_download {
-        let gid = gallery.gid;
-        let thumb_url = &gallery.thumb_url;
+    let client = client.clone();
+    let thumb_cache = thumb_cache.clone();
+    let app = app.cloned();
 
-        // Apply inter-request delay.
-        let delay = if cooldown_remaining > 0 {
-            cooldown_remaining = cooldown_remaining.saturating_sub(1);
-            if cooldown_remaining == 0 {
-                base_delay_ms = 200;
-                tracing::info!("THUMB_COOLDOWN_END: back to {}ms delay", base_delay_ms);
-            }
-            base_delay_ms
-        } else {
-            base_delay_ms
-        };
-        tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+    let mut set: JoinSet<()> = JoinSet::new();
 
-        tracing::info!("THUMB_DOWNLOAD: gid={}, url={}, delay_ms={}", gid, thumb_url, delay);
+    for (gid, thumb_url) in to_download {
+        // Wait while the CDN is rate-limited (backoff pause).
+        while pause_flag.load(Ordering::Relaxed) {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
 
-        // Single attempt with 10s timeout.
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            client.get(thumb_url.as_str()).send(),
-        )
-        .await;
+        let permit = semaphore.clone().acquire_owned().await.unwrap();
+        let client = client.clone();
+        let thumb_cache = thumb_cache.clone();
+        let db = Arc::clone(&db_state);
+        let app = app.clone();
+        let pause_flag = pause_flag.clone();
+        let consec_failures = consec_failures.clone();
+        let downloaded = downloaded.clone();
+        let rejected = rejected.clone();
 
-        match result {
-            Err(_) => {
-                // Timeout.
-                tracing::warn!("THUMB_TIMEOUT: gid={}, url={}", gid, thumb_url);
-                consecutive_failures += 1;
+        set.spawn(async move {
+            let _permit = permit; // released when this task ends
 
-                if consecutive_failures >= 3 {
-                    tracing::warn!(
-                        "THUMB_BACKOFF: pausing 30s after {} consecutive timeouts",
-                        consecutive_failures
-                    );
-                    tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-                    base_delay_ms = 500;
-                    cooldown_remaining = 10;
-                    consecutive_failures = 0;
-                } else {
-                    // Elevate delay for next 10 downloads.
-                    base_delay_ms = 2000;
-                    cooldown_remaining = 10;
-                }
-            }
-            Ok(Err(e)) => {
-                // Network error.
-                tracing::warn!("THUMB_FAIL: gid={}, error=network: {}", gid, e);
-                consecutive_failures += 1;
-                base_delay_ms = 2000;
-                cooldown_remaining = 10;
+            tracing::info!("THUMB_DOWNLOAD: gid={}, url={}", gid, thumb_url);
 
-                if consecutive_failures >= 3 {
-                    tracing::warn!(
-                        "THUMB_BACKOFF: pausing 30s after {} consecutive failures",
-                        consecutive_failures
-                    );
-                    tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-                    base_delay_ms = 500;
-                    cooldown_remaining = 10;
-                    consecutive_failures = 0;
-                }
-            }
-            Ok(Ok(response)) => {
-                let status = response.status();
-                let content_type = response
-                    .headers()
-                    .get(reqwest::header::CONTENT_TYPE)
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or("")
-                    .to_string();
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                client.get(thumb_url.as_str()).send(),
+            )
+            .await;
 
-                if !status.is_success() {
-                    let body_preview = response
-                        .text()
-                        .await
-                        .map(|t| t.chars().take(200).collect::<String>())
-                        .unwrap_or_else(|_| "<unreadable>".to_string());
-                    tracing::warn!(
-                        "THUMB_FAIL: gid={}, status={}, content_type={}, body_preview={}",
-                        gid, status, content_type, body_preview
-                    );
-
-                    consecutive_failures += 1;
-                    if status.as_u16() == 429 || status.as_u16() == 503 || status.as_u16() == 509 {
-                        tracing::warn!("THUMB_RATE_LIMITED: gid={}, status={}", gid, status);
-                        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-                        base_delay_ms = 2000;
-                        cooldown_remaining = 10;
-                    }
-
-                    if consecutive_failures >= 3 {
-                        tracing::warn!(
-                            "THUMB_BACKOFF: pausing 30s after {} consecutive failures",
-                            consecutive_failures
-                        );
+            let outcome: Option<bool> = match result {
+                Err(_) => {
+                    tracing::warn!("THUMB_TIMEOUT: gid={}, url={}", gid, thumb_url);
+                    let do_backoff = {
+                        let mut f = consec_failures.lock().unwrap();
+                        *f += 1;
+                        if *f >= 3 { tracing::warn!("THUMB_BACKOFF: pausing 30s after {} consecutive failures", *f); *f = 0; true } else { false }
+                    };
+                    if do_backoff {
+                        pause_flag.store(true, Ordering::Relaxed);
                         tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-                        base_delay_ms = 500;
-                        cooldown_remaining = 10;
-                        consecutive_failures = 0;
+                        pause_flag.store(false, Ordering::Relaxed);
                     }
-                    continue;
+                    Some(false)
                 }
-
-                // Validate content-type.
-                if !content_type.is_empty() && !content_type.starts_with("image/") {
-                    let body_preview = response
-                        .text()
-                        .await
-                        .map(|t| t.chars().take(200).collect::<String>())
-                        .unwrap_or_else(|_| "<unreadable>".to_string());
-                    tracing::warn!(
-                        "THUMB_WRONG_TYPE: gid={}, content_type={}, body_preview={}",
-                        gid, content_type, body_preview
-                    );
-                    consecutive_failures += 1;
-                    continue;
+                Ok(Err(e)) => {
+                    tracing::warn!("THUMB_FAIL: gid={}, error=network: {}", gid, e);
+                    let do_backoff = {
+                        let mut f = consec_failures.lock().unwrap();
+                        *f += 1;
+                        if *f >= 3 { tracing::warn!("THUMB_BACKOFF: pausing 30s after {} consecutive failures", *f); *f = 0; true } else { false }
+                    };
+                    if do_backoff {
+                        pause_flag.store(true, Ordering::Relaxed);
+                        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                        pause_flag.store(false, Ordering::Relaxed);
+                    }
+                    Some(false)
                 }
+                Ok(Ok(response)) => {
+                    let status = response.status();
+                    let content_type = response
+                        .headers()
+                        .get(reqwest::header::CONTENT_TYPE)
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("")
+                        .to_string();
 
-                match response.bytes().await {
-                    Ok(bytes) => {
-                        tracing::info!("THUMB_SUCCESS: gid={}, size={}", gid, bytes.len());
-                        consecutive_failures = 0;
+                    if !status.is_success() {
+                        let body_preview = response
+                            .text()
+                            .await
+                            .map(|t| t.chars().take(200).collect::<String>())
+                            .unwrap_or_else(|_| "<unreadable>".to_string());
+                        tracing::warn!(
+                            "THUMB_FAIL: gid={}, status={}, body_preview={}",
+                            gid, status, body_preview
+                        );
+                        let is_rate_limit = matches!(status.as_u16(), 429 | 503 | 509);
+                        if is_rate_limit {
+                            tracing::warn!("THUMB_RATE_LIMITED: gid={}, status={}", gid, status);
+                        }
+                        let (backoff, pause_secs) = {
+                            let mut f = consec_failures.lock().unwrap();
+                            *f += 1;
+                            let b = *f >= 3;
+                            if b { tracing::warn!("THUMB_BACKOFF: pausing 30s after {} consecutive failures", *f); *f = 0; }
+                            let secs = if is_rate_limit { 10u64 } else { 30u64 };
+                            (b, if is_rate_limit || b { secs } else { 0 })
+                        };
+                        if pause_secs > 0 {
+                            let _ = backoff; // suppress unused warning
+                            pause_flag.store(true, Ordering::Relaxed);
+                            tokio::time::sleep(std::time::Duration::from_secs(pause_secs)).await;
+                            pause_flag.store(false, Ordering::Relaxed);
+                        }
+                        return;
+                    }
 
-                        match thumb_cache.save(gid, &bytes) {
-                            Ok(path) => {
-                                let _ = db_state.set_thumb_path(gid, &path);
-                                if let Some(app) = app {
-                                    let _ = app.emit(
-                                        "thumbnail-ready",
-                                        ThumbnailReadyEvent {
-                                            gid,
-                                            path,
-                                        },
-                                    );
+                    if !content_type.is_empty() && !content_type.starts_with("image/") {
+                        let body_preview = response
+                            .text()
+                            .await
+                            .map(|t| t.chars().take(200).collect::<String>())
+                            .unwrap_or_else(|_| "<unreadable>".to_string());
+                        tracing::warn!(
+                            "THUMB_WRONG_TYPE: gid={}, content_type={}, body_preview={}",
+                            gid, content_type, body_preview
+                        );
+                        *consec_failures.lock().unwrap() += 1;
+                        return;
+                    }
+
+                    match response.bytes().await {
+                        Ok(bytes) => {
+                            tracing::info!("THUMB_SUCCESS: gid={}, size={}", gid, bytes.len());
+                            *consec_failures.lock().unwrap() = 0;
+                            match thumb_cache.save(gid, &bytes) {
+                                Ok(path) => {
+                                    let _ = db.set_thumb_path(gid, &path);
+                                    if let Some(ref app) = app {
+                                        let _ = app.emit(
+                                            "thumbnail-ready",
+                                            ThumbnailReadyEvent { gid, path },
+                                        );
+                                    }
+                                    Some(true)
                                 }
-                                downloaded += 1;
-                            }
-                            Err(e) => {
-                                tracing::warn!("THUMB_SAVE_REJECTED: gid={}, error={}", gid, e);
-                                rejected += 1;
+                                Err(e) => {
+                                    tracing::warn!("THUMB_SAVE_REJECTED: gid={}, error={}", gid, e);
+                                    Some(false)
+                                }
                             }
                         }
-                    }
-                    Err(e) => {
-                        tracing::warn!("THUMB_FAIL: gid={}, error=read_bytes: {}", gid, e);
-                        consecutive_failures += 1;
+                        Err(e) => {
+                            tracing::warn!("THUMB_FAIL: gid={}, error=read_bytes: {}", gid, e);
+                            *consec_failures.lock().unwrap() += 1;
+                            Some(false)
+                        }
                     }
                 }
+            };
+
+            match outcome {
+                Some(true) => *downloaded.lock().unwrap() += 1,
+                Some(false) => *rejected.lock().unwrap() += 1,
+                None => {}
             }
-        }
+        });
     }
-    tracing::info!("THUMB_BATCH_DONE: downloaded={}, rejected={}", downloaded, rejected);
-    downloaded
+
+    while set.join_next().await.is_some() {}
+
+    let dl = *downloaded.lock().unwrap();
+    let rj = *rejected.lock().unwrap();
+    tracing::info!("THUMB_BATCH_DONE: downloaded={}, rejected={}", dl, rj);
+    dl
 }
 
 /// Multi-page sync: fetches `depth` pages of gallery listings sequentially
@@ -455,11 +465,11 @@ pub async fn sync_galleries(
         done: false,
     });
 
-    // Download thumbnails sequentially with adaptive throttling.
+    // Download thumbnails concurrently with adaptive throttling.
     let thumbs_downloaded = download_thumbs_sequential(
         &client,
         &thumbs_needed,
-        &db_state,
+        Arc::clone(&db_state),
         &thumb_cache,
         None,
     )
@@ -582,7 +592,7 @@ pub async fn download_thumbnails_for_gids(
 
     // Spawn in background so IPC returns immediately.
     tokio::spawn(async move {
-        download_thumbs_sequential(&client, &bg_galleries, &bg_db, &bg_thumb, Some(&bg_app)).await;
+        download_thumbs_sequential(&client, &bg_galleries, bg_db, &bg_thumb, Some(&bg_app)).await;
     });
 
     Ok(0)

@@ -17,7 +17,7 @@
 - **Max per request:** 25 galleries
 - **Response:** JSON with `gmetadata` array containing full gallery metadata
 - **Fields returned:** title, title_jpn, category, thumb, uploader, posted, filecount, filesize, rating, tags (namespaced), and more
-- **Rate limiting:** ~4-5 requests allowed before rate limiting kicks in
+- **Rate limiting:** ~4-5 sequential requests allowed, then must wait ~5 seconds before continuing
 - **No page view cost**
 
 ## nl retry mechanism

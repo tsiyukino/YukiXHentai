@@ -11,7 +11,7 @@ import { detailPageThumbs } from "$lib/stores/detail";
 // Concurrency: up to MAX_CONCURRENT downloads in flight simultaneously.
 // Callers cancel by calling reset() on gallery change or component destroy.
 
-const MAX_CONCURRENT = 20;
+const MAX_CONCURRENT = 6;
 
 let activeGid: number | null = null;
 let queue: { gid: number; pageIdx: number; thumbUrl: string }[] = [];
