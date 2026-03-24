@@ -142,17 +142,17 @@
 - Each call fetches one ExH detail page (p=N, 20 or 40 entries depending on site settings).
 - After p=0 responds, frontend records `pagesPerBatch = result.pages.length` and passes it to all subsequent calls.
 - Backend uses `pagesPerBatch` to compute correct `base_index = detailPage * pagesPerBatch` for page index assignment.
-- IntersectionObserver sentinels at each `pagesPerBatch`-page boundary trigger the next fetch.
+- Each batch gets one IntersectionObserver watching all thumbnails in that batch range — any thumbnail entering view (not just the first) triggers the next fetch.
 - Pages are stored in DB incrementally via upsert (not bulk replace).
 - On navigation away: `setActiveDetailGallery(null)` cancels all in-flight batch fetches and thumbnail downloads.
 - `get_gallery_pages` (fetch-all) is NOT used when opening the reader — reader receives stubs for unloaded pages and fetches batches on demand.
 
 ## Reader batch loading (preview strip)
-- `GalleryReader` receives a `GalleryPages` with `total_pages = N` (truth from HTML parse, stored in `detailBatchState.totalPageCount`) and `pages[]` where unloaded entries are stubs (`{page_url:"", thumb_url:null, ...}`).
+- `GalleryReader` receives a `GalleryPages` with `total_pages = N` (truth from HTML parse, stored in `detailBatchState.totalPageCount`) and `pages[]` where unloaded entries are stubs (`{page_url:"", thumb_url:null, ...}`). DB-sourced entries may also have `page_url` set but `thumb_url: null` (stored before thumbnail was downloaded). `enqueueThumb` merges from `detailBatchState.pageEntries` when the slot is missing `page_url` OR `thumb_url` — the wider check ensures `detailBatchState`'s richer entry fills partial slots.
 - `detailBatchState` store carries `{ gid, token, showkey, pagesPerBatch, totalPageCount, fetchedDetailPages: Set, pageEntries: Record }` — same references as the detail page's local state, mutated in-place.
 - `totalPageCount` is set once in `fetchBatch` from `result.total_pages` (HTML parse). Never recalculated. Stored in `detailBatchState.totalPageCount` so both components agree on the count across sessions.
-- Reader sets up IntersectionObserver sentinels on `data-strip-sentinel` attributes ONLY when `showControls=true` and `stripEl` is bound (strip is in the DOM). Sentinels queried via `stripEl.querySelector(...)` with `root: stripEl, rootMargin: "0px 600px 0px 600px"`.
-- When a sentinel for batch dp enters view, `fetchStripBatch(gid, dp)` is called — mirrors `fetchBatch` in GalleryDetail.
+- Reader sets up IntersectionObservers on `data-strip-sentinel` attributes ONLY when `showControls=true` and `stripEl` is bound (strip is in the DOM). Each batch gets one observer watching all thumbnails in `[dp*ppb, dp*ppb+ppb)` via `stripEl.querySelector(...)` with `root: stripEl, rootMargin: "0px 600px 0px 600px"`.
+- When any thumbnail in batch dp enters view, `fetchStripBatch(gid, dp)` is called — mirrors `fetchBatch` in GalleryDetail.
 - Fetched entries written into `gallery.pages[idx]` (reader's local state) and `detailBatchState.pageEntries` (shared). `fetchedDetailPages.add(dp)` marks the batch done for both sides.
 - If the detail page has already fetched a batch while the reader is open, the reader skips re-fetching and calls `syncBatchStateToGallery` to merge known entries.
 - On close to detail page: `detailBatchState` is preserved; detail's open effect detects same-gallery by `detailBatchState.gid === g.gid` and restores `totalPageCount`/`fetchedDetailPages`/`pageEntries` from store.

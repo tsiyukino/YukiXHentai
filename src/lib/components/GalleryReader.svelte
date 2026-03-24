@@ -43,10 +43,11 @@
   // Throttle strip thumbnail requests
   let thumbRequestTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // Sequential thumbnail download queue for the preview strip.
-  // IPC calls are queued and executed one at a time with a 200ms delay between requests.
+  // Concurrent thumbnail download queue for the preview strip.
+  // Mirrors GalleryDetail's processDownloadQueue / downloadThumb pattern.
+  const THUMB_MAX_CONCURRENT = 20;
   let thumbQueue: number[] = [];
-  let thumbQueueRunning = false;
+  let thumbDownloadingSet = new Set<number>();
 
   // Per-batch in-flight promises for strip batch fetches.
   // Allows loadImage to await an already-in-progress batch fetch rather than
@@ -273,7 +274,10 @@
     const bs = get(detailBatchState);
     if (bs && bs.gid === gallery.gid && bs.pageEntries[pageIdx]?.page_url) {
       // Merge entry into gallery.pages so it's available for loadImage too.
-      if (!gallery.pages[pageIdx]?.page_url) {
+      // Merge if the existing slot lacks page_url OR thumb_url — the DB may have stored
+      // a page entry with page_url but null thumb_url, leaving the thumb unresolvable
+      // without the richer entry from detailBatchState.
+      if (!gallery.pages[pageIdx]?.page_url || !gallery.pages[pageIdx]?.thumb_url) {
         gallery.pages[pageIdx] = bs.pageEntries[pageIdx];
       }
     }
@@ -282,47 +286,43 @@
     if (!entry || !entry.thumb_url) return; // Stub — batch observer will deliver the entry.
 
     thumbQueue.push(pageIdx);
-    if (!thumbQueueRunning) runThumbQueue();
+    processThumbQueue();
   }
 
-  async function runThumbQueue() {
-    thumbQueueRunning = true;
-    while (thumbQueue.length > 0) {
-      if (!alive) break;
+  function processThumbQueue() {
+    while (thumbDownloadingSet.size < THUMB_MAX_CONCURRENT && thumbQueue.length > 0) {
       const pageIdx = thumbQueue.shift()!;
       if (pageIdx in thumbPaths || pageIdx in thumbLoading) continue;
-      if (!gallery) break;
+      if (!gallery || !alive) continue;
 
       const entry = gallery.pages[pageIdx];
       if (!entry?.thumb_url) continue;
 
+      thumbDownloadingSet.add(pageIdx);
       thumbLoading[pageIdx] = true;
-      try {
-        const path = await getPageThumbnail(gallery.gid, pageIdx, entry.thumb_url);
-        // Guard both alive and gallery — gallery may have become null if the
-        // reader closed during the await (store subscriber fires synchronously).
-        // Never write an empty/null/error path; only write on success.
-        if (!alive || !gallery) break;
-        thumbPaths[pageIdx] = convertFileSrc(path);
-        // Write back to shared store so detail page also benefits.
-        const cur = get(detailPageThumbs);
-        if (cur && cur.gid === gallery.gid) {
-          cur.paths[pageIdx] = path;
-          detailPageThumbs.set(cur);
-        }
-      } catch {
-        // Cancelled or failed — skip this entry, leave skeleton placeholder.
-        // Do NOT write any path to detailPageThumbs on error.
-      } finally {
-        delete thumbLoading[pageIdx];
-      }
 
-      // 200ms delay between requests to avoid hammering the CDN.
-      if (thumbQueue.length > 0) {
-        await new Promise((r) => setTimeout(r, 200));
-      }
+      downloadThumb(gallery.gid, pageIdx, entry.thumb_url).finally(() => {
+        thumbDownloadingSet.delete(pageIdx);
+        delete thumbLoading[pageIdx];
+        processThumbQueue();
+      });
     }
-    thumbQueueRunning = false;
+  }
+
+  async function downloadThumb(gid: number, pageIdx: number, thumbUrl: string) {
+    try {
+      const path = await getPageThumbnail(gid, pageIdx, thumbUrl);
+      if (!alive || !gallery || gallery.gid !== gid) return;
+      thumbPaths[pageIdx] = convertFileSrc(path);
+      // Write back to shared store so detail page also benefits.
+      const cur = get(detailPageThumbs);
+      if (cur && cur.gid === gid) {
+        cur.paths[pageIdx] = path;
+        detailPageThumbs.set(cur);
+      }
+    } catch {
+      // Cancelled or failed — leave skeleton placeholder.
+    }
   }
 
   // --- Strip batch loading (mirrors detail page IntersectionObserver mechanism) ---
@@ -350,13 +350,12 @@
         continue;
       }
 
-      // Sentinel is the first page_index of this batch.
-      const sentinelIdx = dp * pagesPerBatch;
-      // Query inside the strip element so we don't accidentally match detail page sentinels.
-      const el = stripEl.querySelector(`[data-strip-sentinel="${sentinelIdx}"]`) as HTMLElement | null;
-      if (!el) continue;
+      // Observe every thumbnail in the batch — any one becoming visible triggers the fetch.
+      // This ensures the batch loads even if the user scrolls into the middle of an
+      // unfetched range without ever passing the first thumbnail of the batch.
+      const start = dp * pagesPerBatch;
+      const end = Math.min(start + pagesPerBatch, totalPages);
 
-      sentinelsFound++;
       const observer = new IntersectionObserver(
         (entries) => {
           for (const entry of entries) {
@@ -371,7 +370,15 @@
         // rootMargin pre-loads one strip-width ahead of current scroll position.
         { root: stripEl, rootMargin: "0px 600px 0px 600px", threshold: 0 }
       );
-      observer.observe(el);
+
+      let observed = 0;
+      for (let i = start; i < end; i++) {
+        const el = stripEl.querySelector(`[data-strip-sentinel="${i}"]`) as HTMLElement | null;
+        if (el) { observer.observe(el); observed++; }
+      }
+      if (observed === 0) { observer.disconnect(); continue; }
+
+      sentinelsFound++;
       batchObservers.push(observer);
     }
 

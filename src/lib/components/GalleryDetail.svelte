@@ -315,14 +315,15 @@
     // Clean up old observers.
     cleanupObservers();
 
-    // For each unfetched detail page, observe the sentinel at the start of that batch.
+    // For each unfetched detail page, observe every thumbnail in the batch.
+    // Any one becoming visible triggers the fetch — ensures the batch loads even
+    // if the user scrolls into the middle of an unfetched range.
     const totalDetailPages = Math.ceil(totalPageCount / pagesPerBatch);
     for (let dp = 0; dp < totalDetailPages; dp++) {
       if (fetchedDetailPages.has(dp) || fetchingDetailPages.has(dp)) continue;
 
-      const sentinelIdx = dp * pagesPerBatch; // First page_index of this batch.
-      const el = document.querySelector(`[data-page-sentinel="${sentinelIdx}"]`) as HTMLElement | null;
-      if (!el) continue;
+      const start = dp * pagesPerBatch;
+      const end = Math.min(start + pagesPerBatch, totalPageCount);
 
       const observer = new IntersectionObserver(
         (entries) => {
@@ -335,7 +336,14 @@
         },
         { root: null, rootMargin: "400px", threshold: 0 }
       );
-      observer.observe(el);
+
+      let observed = 0;
+      for (let i = start; i < end; i++) {
+        const el = document.querySelector(`[data-page-sentinel="${i}"]`) as HTMLElement | null;
+        if (el) { observer.observe(el); observed++; }
+      }
+      if (observed === 0) { observer.disconnect(); continue; }
+
       batchObservers.push(observer);
     }
   }
