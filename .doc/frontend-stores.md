@@ -77,6 +77,13 @@
 - **Shape:** `Writable<boolean>`
 - **Used by:** `Sidebar.svelte`
 
+## Page thumbnail service (stores/pageThumbs.ts)
+
+### enqueuePageThumb / resetPageThumbs / setThumbReadyCallback
+- **Exports:** `enqueuePageThumb(gid, pageIdx, thumbUrl)`, `resetPageThumbs(gid)`, `setThumbReadyCallback(cb | null)`
+- **Used by:** `GalleryDetail.svelte`, `GalleryReader.svelte`
+- **Notes:** Singleton service owning the concurrent page-thumbnail download queue (up to 20 in flight). Replaces the duplicate `processDownloadQueue`/`downloadThumb` logic that previously existed in both components. On success, writes raw path to `detailPageThumbs` store in-place, then invokes the registered `onReady(pageIdx, rawPath)` callback. Only one callback active at a time (last `setThumbReadyCallback` call wins — Detail registers on gallery open, Reader registers on gallery open, both clear on close/destroy). `resetPageThumbs(gid)` sets the active gid and drops all queued (not yet started) downloads; in-flight downloads for the old gid resolve but are discarded via gid mismatch check. `enqueuePageThumb` deduplicates against the in-flight set and queue.
+
 ## Detail stores (stores/detail.ts)
 
 ### detailGallery

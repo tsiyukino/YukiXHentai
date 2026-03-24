@@ -7,7 +7,6 @@
   import {
     getGalleryImage,
     getGalleryPagesBatch,
-    getPageThumbnail,
     updateReadProgress,
     endReadingSession,
     onImageDownloadProgress,
@@ -15,6 +14,7 @@
     registerDownloadSession,
     setActiveDetailGallery,
   } from "$lib/api/reader";
+  import { enqueuePageThumb, resetPageThumbs, setThumbReadyCallback } from "$lib/stores/pageThumbs";
   import type { GalleryPages, ReadProgress, ImageDownloadProgressEvent } from "$lib/api/reader";
   import { readerGallery, readerPage, readerMode, readerSessionId, readerSourceGallery } from "$lib/stores/reader";
   import { detailGallery, detailPageThumbs, detailBatchState } from "$lib/stores/detail";
@@ -38,16 +38,9 @@
 
   // Thumbnail strip state
   let thumbPaths = $state<Record<number, string>>({});
-  let thumbLoading = $state<Record<number, true>>({}); // currently fetching
 
   // Throttle strip thumbnail requests
   let thumbRequestTimer: ReturnType<typeof setTimeout> | null = null;
-
-  // Concurrent thumbnail download queue for the preview strip.
-  // Mirrors GalleryDetail's processDownloadQueue / downloadThumb pattern.
-  const THUMB_MAX_CONCURRENT = 20;
-  let thumbQueue: number[] = [];
-  let thumbDownloadingSet = new Set<number>();
 
   // Per-batch in-flight promises for strip batch fetches.
   // Allows loadImage to await an already-in-progress batch fetch rather than
@@ -109,6 +102,7 @@
   onDestroy(() => {
     alive = false;
     unsubs.forEach((u) => u());
+    setThumbReadyCallback(null);
     window.removeEventListener("keydown", handleKeydown);
     // Disconnect strip batch observers.
     for (const obs of batchObservers) obs.disconnect();
@@ -145,8 +139,6 @@
       downloadProgress = {};
       pagesViewed = new Set();
       thumbPaths = {};
-      thumbLoading = {};
-      thumbQueue = [];
       activeGid = newGid;
       // Register a new download session for the new gallery.
       if (newGid !== null) {
@@ -158,11 +150,21 @@
         // The detail's g=null branch calls setActiveDetailGallery(null) when it closes;
         // the reader must restore it here so strip thumb downloads aren't cancelled.
         setActiveDetailGallery(newGid).catch(() => {});
+        // Reset the shared thumbnail service for this gallery and register our callback.
+        resetPageThumbs(newGid);
+        setThumbReadyCallback((pageIdx, rawPath) => {
+          if (activeGid === newGid && alive) {
+            thumbPaths[pageIdx] = convertFileSrc(rawPath);
+          }
+        });
         // Increment open counter so the strip sentinel $effect always re-runs on every
         // open, even if showControls is already true and activeGid hasn't changed.
         readerOpenCount++;
         // NOTE: do NOT call setupStripBatchObservers here — the strip is only rendered
         // when showControls=true. Observers are set up by the showControls $effect below.
+      } else {
+        // Gallery closed — release the callback so stale results don't write to thumbPaths.
+        setThumbReadyCallback(null);
       }
     }
   });
@@ -256,12 +258,11 @@
     }
   }
 
-  // Enqueue a page index for sequential thumbnail loading.
-  // Skips if already cached, already queued, or already loading.
+  // Enqueue a page thumbnail via the shared pageThumbs service.
+  // Skips if already displayed or no thumb_url available yet (stub).
   function enqueueThumb(pageIdx: number) {
     if (!alive || !gallery) return;
-    if (pageIdx in thumbPaths || pageIdx in thumbLoading) return;
-    if (thumbQueue.includes(pageIdx)) return;
+    if (pageIdx in thumbPaths) return;
 
     // Check shared store first — no IPC needed if already cached.
     const shared = get(detailPageThumbs);
@@ -285,44 +286,7 @@
     const entry = gallery.pages[pageIdx];
     if (!entry || !entry.thumb_url) return; // Stub — batch observer will deliver the entry.
 
-    thumbQueue.push(pageIdx);
-    processThumbQueue();
-  }
-
-  function processThumbQueue() {
-    while (thumbDownloadingSet.size < THUMB_MAX_CONCURRENT && thumbQueue.length > 0) {
-      const pageIdx = thumbQueue.shift()!;
-      if (pageIdx in thumbPaths || pageIdx in thumbLoading) continue;
-      if (!gallery || !alive) continue;
-
-      const entry = gallery.pages[pageIdx];
-      if (!entry?.thumb_url) continue;
-
-      thumbDownloadingSet.add(pageIdx);
-      thumbLoading[pageIdx] = true;
-
-      downloadThumb(gallery.gid, pageIdx, entry.thumb_url).finally(() => {
-        thumbDownloadingSet.delete(pageIdx);
-        delete thumbLoading[pageIdx];
-        processThumbQueue();
-      });
-    }
-  }
-
-  async function downloadThumb(gid: number, pageIdx: number, thumbUrl: string) {
-    try {
-      const path = await getPageThumbnail(gid, pageIdx, thumbUrl);
-      if (!alive || !gallery || gallery.gid !== gid) return;
-      thumbPaths[pageIdx] = convertFileSrc(path);
-      // Write back to shared store so detail page also benefits.
-      const cur = get(detailPageThumbs);
-      if (cur && cur.gid === gid) {
-        cur.paths[pageIdx] = path;
-        detailPageThumbs.set(cur);
-      }
-    } catch {
-      // Cancelled or failed — leave skeleton placeholder.
-    }
+    enqueuePageThumb(gallery.gid, pageIdx, entry.thumb_url);
   }
 
   // --- Strip batch loading (mirrors detail page IntersectionObserver mechanism) ---

@@ -17,12 +17,12 @@
     getReadProgress,
     startReadingSession,
     fetchGalleryMetadata,
-    getPageThumbnail,
     setActiveDetailGallery,
     getDetailPreviewSize,
     setDetailPreviewSize,
     getGalleryPagesBatch,
   } from "$lib/api/reader";
+  import { enqueuePageThumb, resetPageThumbs, setThumbReadyCallback } from "$lib/stores/pageThumbs";
   import type { GalleryPageEntry } from "$lib/api/reader";
   import type { Gallery } from "$lib/api/galleries";
 
@@ -58,10 +58,7 @@
   // Learned from the p=0 response and passed to all subsequent batch fetches.
   let pagesPerBatch = 20;
 
-  // Thumbnail download tracking.
-  let downloadingSet = new Set<number>();
-  let downloadQueue: number[] = [];
-  const MAX_CONCURRENT = 20;
+  // Thumbnail download tracking — queue/concurrency managed by pageThumbs service.
 
   // IntersectionObservers for batch sentinels.
   let batchObservers: IntersectionObserver[] = [];
@@ -71,6 +68,7 @@
 
   onDestroy(() => {
     alive = false;
+    setThumbReadyCallback(null);
     cleanupAll();
     // Cancel pending page thumbnail downloads.
     setActiveDetailGallery(null).catch(() => {});
@@ -111,8 +109,6 @@
       totalPageCount = 0;
       fetchedDetailPages = new Set();
       fetchingDetailPages = new Set();
-      downloadingSet = new Set();
-      downloadQueue = [];
       pagesPerBatch = 20;
       cleanupObservers();
       // Only wipe detailBatchState here when opening a NEW gallery (g !== null).
@@ -137,6 +133,13 @@
     if (g) {
       gallery = g;
       currentGid = g.gid;
+      // Reset service queue for this gallery and register our write-back callback.
+      resetPageThumbs(g.gid);
+      setThumbReadyCallback((pageIdx, rawPath) => {
+        if (currentGid === g.gid && alive) {
+          pageThumbPaths[pageIdx] = rawPath;
+        }
+      });
       // Recover any thumbnail paths already cached in the shared store (e.g. loaded
       // by the reader while it was open for this same gallery) so we don't re-fetch.
       // Use get() (non-reactive) so reading the store here doesn't make it a
@@ -173,6 +176,7 @@
     } else {
       gallery = null;
       currentGid = null;
+      setThumbReadyCallback(null);
       // Don't reset pageEntries/totalPageCount here — the reader may still be open
       // and holding references into the same objects. They'll be reset on next gallery open.
       pageThumbPaths = {};
@@ -203,8 +207,6 @@
 
   function cleanupAll() {
     cleanupObservers();
-    downloadQueue = [];
-    downloadingSet.clear();
     fetchingDetailPages.clear();
   }
 
@@ -227,25 +229,21 @@
   async function fetchBatch(gid: number, token: string, detailPage: number) {
     if (!alive || currentGid !== gid) return;
     if (fetchedDetailPages.has(detailPage) || fetchingDetailPages.has(detailPage)) {
-      // Already fetched — but if cleanupAll() wiped the queue (happens when detail
-      // closes to open the reader), restart thumbnail downloads for this batch.
-      // IMPORTANT: defer via setTimeout so this runs outside the $effect's reactive
-      // tracking window. processDownloadQueue reads pageEntries and pageThumbPaths
-      // ($state), which would become tracked dependencies if called synchronously
-      // here, causing the $effect to re-run on every thumbnail write (infinite loop).
-      if (downloadQueue.length === 0 && downloadingSet.size === 0) {
-        const start = detailPage * pagesPerBatch;
-        const end = start + pagesPerBatch;
-        setTimeout(() => {
-          if (!alive || currentGid !== gid) return;
-          for (let i = start; i < end; i++) {
-            if (i in pageEntries && !(i in pageThumbPaths)) {
-              enqueueThumbDownload(i);
-            }
+      // Already fetched — re-enqueue any thumbnails not yet downloaded (e.g. on
+      // return from the reader). Deferred so this runs outside the $effect's reactive
+      // tracking window (pageEntries/$state reads must not become tracked dependencies).
+      // enqueuePageThumb deduplicates internally — safe to call unconditionally.
+      const start = detailPage * pagesPerBatch;
+      const end = start + pagesPerBatch;
+      setTimeout(() => {
+        if (!alive || currentGid !== gid) return;
+        for (let i = start; i < end; i++) {
+          if (i in pageEntries && !(i in pageThumbPaths)) {
+            enqueueThumbDownload(i);
           }
-          setupSentinelObservers(gid, token);
-        }, 0);
-      }
+        }
+        setupSentinelObservers(gid, token);
+      }, 0);
       return;
     }
 
@@ -349,47 +347,10 @@
   }
 
   function enqueueThumbDownload(pageIdx: number) {
-    if (downloadingSet.has(pageIdx) || downloadQueue.includes(pageIdx)) return;
-    if (pageIdx in pageThumbPaths) return;
-    downloadQueue.push(pageIdx);
-    processDownloadQueue();
-  }
-
-  async function processDownloadQueue() {
-    while (downloadingSet.size < MAX_CONCURRENT && downloadQueue.length > 0) {
-      const pageIdx = downloadQueue.shift()!;
-      if (pageIdx in pageThumbPaths) continue;
-      const entry = pageEntries[pageIdx];
-      if (!entry?.thumb_url || currentGid === null) continue;
-
-      const gid = currentGid;
-      downloadingSet.add(pageIdx);
-
-      downloadThumb(gid, pageIdx, entry.thumb_url).finally(() => {
-        downloadingSet.delete(pageIdx);
-        processDownloadQueue();
-      });
-    }
-  }
-
-  async function downloadThumb(gid: number, pageIdx: number, thumbUrl: string) {
-    try {
-      const localPath = await getPageThumbnail(gid, pageIdx, thumbUrl);
-      if (currentGid === gid && alive) {
-        pageThumbPaths[pageIdx] = localPath;
-        // Keep shared store in sync so GalleryReader can read these paths.
-        // Update the paths object in-place to avoid replacing the store reference
-        // on every download — a wholesale store replacement would re-trigger any
-        // $effect that reads $detailPageThumbs as a reactive dependency.
-        const cur = get(detailPageThumbs);
-        if (cur && cur.gid === gid) {
-          cur.paths[pageIdx] = localPath;
-          detailPageThumbs.set(cur);
-        }
-      }
-    } catch {
-      // Cancelled or failed — ignore.
-    }
+    if (pageIdx in pageThumbPaths || currentGid === null) return;
+    const entry = pageEntries[pageIdx];
+    if (!entry?.thumb_url) return;
+    enqueuePageThumb(currentGid, pageIdx, entry.thumb_url);
   }
 
   let imgLoaded = $state(false);
