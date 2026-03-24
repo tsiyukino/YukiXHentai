@@ -1,0 +1,76 @@
+# ── Node / Frontend ──────────────────────────────────────────────────────────
+node_modules/
+/build/
+/.svelte-kit/
+/package/
+dist/
+.npm/
+
+# ── Environment / Secrets ────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Vite ─────────────────────────────────────────────────────────────────────
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+
+# ── Rust / Cargo ─────────────────────────────────────────────────────────────
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# ── Tauri ─────────────────────────────────────────────────────────────────────
+src-tauri/WixTools/
+
+# ── App data / Cache (user runtime data, never commit) ───────────────────────
+# SQLite databases
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Image cache directory (content-addressable, runtime only)
+cache/
+image_cache/
+app_cache/
+
+# ── Cookies / Auth (SENSITIVE) ────────────────────────────────────────────────
+cookies.json
+cookies.txt
+session.json
+*.cookie
+auth.json
+
+# ── Config with potential secrets ────────────────────────────────────────────
+config.json
+config.local.*
+settings.local.*
+user_config.*
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ── Editor ───────────────────────────────────────────────────────────────────
+.idea/
+*.swp
+*.swo
+*~
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ── Test artifacts ───────────────────────────────────────────────────────────
+coverage/
