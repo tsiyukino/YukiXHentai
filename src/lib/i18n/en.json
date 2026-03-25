@@ -9,7 +9,7 @@
     "favorites": "Favorites",
     "watched": "Watched",
     "history": "History",
-    "downloads": "Downloads",
+    "downloads": "Local",
     "settings": "Settings"
   },
   "auth": {
@@ -83,7 +83,15 @@
     "rating_count": "Ratings",
     "uploaded": "Uploaded",
     "tags": "Tags",
-    "previews": "Previews"
+    "previews": "Previews",
+    "download_queued": "Added to download queue",
+    "download_already_local": "Already in local library",
+    "download_local": "In library",
+    "delete_local": "Delete",
+    "delete_local_confirm": "Remove this gallery from your local library? This will also delete the files on disk.",
+    "delete_local_success": "Gallery deleted from local library.",
+    "sync_local": "Sync",
+    "sync_local_no_origin": "This gallery has no origin — sync is unavailable."
   },
   "reader": {
     "page_of": "{current} / {total}",
@@ -158,7 +166,16 @@
   },
   "favorites_page": {
     "title": "Favorites",
-    "empty": "No favorites yet."
+    "empty": "No favorites yet.",
+    "all": "All",
+    "load_more": "Load more"
+  },
+  "favorites_dialog": {
+    "title": "Add to Favorites",
+    "note": "Note",
+    "note_placeholder": "Personal note (optional)...",
+    "save": "Save",
+    "remove": "Remove from Favorites"
   },
   "watched_page": {
     "title": "Watched",
@@ -191,5 +208,71 @@
     "confirm": "Confirm",
     "close": "Close",
     "back": "Back"
+  },
+  "local": {
+    "title": "Local Library",
+    "gallery_count": "{count} galleries",
+    "filter_placeholder": "Filter by title, category, tags...",
+    "import_folder": "Import folder",
+    "import_json": "Import from JSON",
+    "queue_download": "Queue download",
+    "edit_metadata": "Edit metadata",
+    "empty_title": "No local galleries yet",
+    "empty_hint": "Import folders or queue downloads to build your library.",
+    "import_preview_title": "Import Preview",
+    "import_confirm": "Confirm Import",
+    "import_cancel": "Cancel",
+    "detected_title": "Detected title",
+    "page_count": "{count} pages",
+    "sample_files": "Files (first 20)",
+    "metadata_found": "metadata.json found",
+    "no_metadata": "No metadata.json — will use folder name",
+    "insert_pages": "Insert pages",
+    "insert_at_end": "End",
+    "insert_position": "Insert after page",
+    "page_index": "Page {n}",
+    "remove_page": "Remove page",
+    "remove_page_confirm": "Delete this page from disk?",
+    "cover": "Cover",
+    "change_cover": "Change cover",
+    "tags_from_exh": "Tags from ExHentai (read-only)",
+    "tags_local": "Your tags",
+    "add_tag": "Add tag",
+    "tag_namespace": "namespace (optional)",
+    "tag_value": "value",
+    "save": "Save",
+    "unsaved_changes": "You have unsaved changes. Close anyway?",
+    "description": "Description",
+    "folder_path_label": "Folder path",
+    "folder_path_placeholder": "e.g. C:\\Users\\you\\Pictures\\gallery"
+  },
+  "queue": {
+    "title": "Queue Download",
+    "manual_tab": "Manual",
+    "json_tab": "JSON file",
+    "textarea_placeholder": "Enter gallery URLs or IDs, one per line.\nSupported formats:\nhttps://exhentai.org/g/1234567/abcdef1234/\n1234567:abcdef1234\n1234567",
+    "pick_json": "Pick JSON file",
+    "resolve_all": "Resolve all",
+    "queue_all": "Queue all ready",
+    "clear": "Clear",
+    "close": "Close",
+    "download_originals": "Download originals",
+    "subfolder": "Library subfolder (optional)",
+    "status_pending": "Pending",
+    "status_resolving": "Resolving...",
+    "status_ready": "Ready",
+    "status_already_local": "Already local",
+    "status_failed": "Failed",
+    "summary": "{ready} ready · {alreadyLocal} already local · {failed} failed · {resolving} resolving",
+    "close_confirm": "Close without queuing?",
+    "queued_count": "{count} galleries queued"
+  },
+  "download_banner": {
+    "downloading": "Downloading: {title}",
+    "page_progress": "Page {current} of {total}",
+    "pause": "Pause",
+    "resume": "Resume",
+    "cancel": "Cancel",
+    "cancel_confirm": "Cancel all downloads?"
   }
 }

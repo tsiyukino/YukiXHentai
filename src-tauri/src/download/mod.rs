@@ -1,8 +1,8 @@
-//! Image download queue with concurrency control, rate limiting, and nl retry.
-//!
-//! Max 3 concurrent image downloads with 500ms between starts.
-//! On 509 (bandwidth exceeded): pause all downloads with exponential backoff.
-//! On failure: retry with nl key for alternate server.
+// Image download queue with concurrency control, rate limiting, and nl retry.
+// Max 3 concurrent image downloads with 500ms between starts.
+// On 509 (bandwidth exceeded): pause all downloads with exponential backoff.
+// On failure: retry with nl key for alternate server.
+pub mod local_queue;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;

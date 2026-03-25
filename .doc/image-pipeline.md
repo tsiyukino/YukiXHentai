@@ -1,5 +1,5 @@
 # Image Pipeline
-> Last updated: 2026-03-22 (viewport-driven thumbnails) | Affects: src-tauri/src/images/, src-tauri/src/download/, src-tauri/src/commands/
+> Last updated: 2026-03-24 (LRU read cache for originals) | Affects: src-tauri/src/images/, src-tauri/src/download/, src-tauri/src/commands/
 
 ## Cache directory
 - Default: `{platform_cache_dir}/yukixhentai/` (Windows: `%LOCALAPPDATA%/yukixhentai/`)
@@ -21,6 +21,15 @@
 
 ### path_for_image / save / find_cached
 - Standard cache operations. find_cached checks jpg, png, webp, gif.
+
+## LRU eviction (OriginalsCache only)
+- Tracked in `read_cache_index` SQLite table (v12). `page-thumbs` and `thumbs` caches are NOT evicted.
+- Cache key: `"{gid}_{page_index}"`.
+- On save: `images::read_cache::track_save(db, key, path, max_bytes)` — upserts index entry, calls evict loop.
+- On cache hit: `images::read_cache::track_access(db, key)` — bumps `last_access` timestamp.
+- Eviction: deletes row with smallest `last_access` + its file until `SUM(size_bytes) <= max_bytes`.
+- Configured by `[storage].read_cache_max_mb` (128–4096, default 512).
+- IPC: `get_read_cache_stats`, `set_read_cache_max_mb`, `clear_read_cache`.
 
 ## PageThumbCache
 - **Signature:** `struct PageThumbCache { base_dir: PathBuf }`
@@ -61,23 +70,32 @@
 ## Viewport-driven thumbnail loading
 - **`sync_next_page` does NOT download thumbnails.** It returns galleries immediately.
 - Frontend `GalleryGrid` tracks which galleries are visible via `VirtualGrid`/`VirtualList` `onVisibleRangeChanged` callback.
+- `FavoritesPage` uses `IntersectionObserver` (rootMargin: 200px) on each `.gallery-row[data-gid]` element.
 - When visible galleries lack `thumb_path`, frontend calls `download_thumbnails_for_gids(gids)` IPC with only the visible gids.
 - Call is debounced (150ms) to avoid spamming during fast scrolling.
 - `requestedThumbGids` set prevents re-requesting thumbnails already in-flight.
+- **Automatic retry on failure:** After `THUMB_RETRY_AFTER_MS` (20s), any gid in the batch that still has no `thumb_path` (backend timed out or failed) is removed from `requestedThumbGids` and re-observed. The next intersection event will re-request them.
 - This means loading 400 galleries but only viewing 100 results in ~100 thumbnail downloads, not 400.
 
 ## Gallery thumbnail concurrency (`download_thumbs_sequential`)
-- Downloads are **concurrent** up to `THUMB_CONCURRENCY` (6) in flight simultaneously — matches JHentai/EhViewer observed safe concurrency limit for `ehgt.org`.
-- `tokio::task::JoinSet` spawns one task per thumbnail; a `tokio::sync::Semaphore(20)` caps concurrency.
+- Downloads are **concurrent** up to `THUMB_CONCURRENCY` (6) in flight simultaneously.
+- `tokio::task::JoinSet` spawns one task per thumbnail; a `tokio::sync::Semaphore(6)` caps concurrency.
 - Shared `Arc<AtomicBool>` pause flag: when set, the launch loop spins (100ms polls) before acquiring the next permit. Set by any task that receives a rate-limit or backoff trigger.
 - Shared `Arc<Mutex<u32>>` consecutive-failure counter across all tasks.
-- **10s timeout** per HTTP request.
-- **No retries** on individual failures — the frontend can re-request on next scroll.
+- **20s timeout** per HTTP request.
+- **No retries within a batch** — backend does not retry individual failures. The frontend retries automatically (see Viewport-driven thumbnail loading below).
 - **3 consecutive failures** → 30s pause (pause flag set for duration).
 - **429/503/509 responses** → 10s pause (pause flag set for duration).
 - **Content-type validation**: rejects non-`image/*` responses.
 - Function signature takes `Arc<DbState>` (not `&DbState`) so tasks can clone the Arc without unsafe code.
 - **Diagnostic logging**: `THUMB_DOWNLOAD`, `THUMB_SUCCESS`, `THUMB_FAIL`, `THUMB_TIMEOUT`, `THUMB_RATE_LIMITED`, `THUMB_WRONG_TYPE`, `THUMB_SAVE_REJECTED`, `THUMB_BACKOFF`, `THUMB_BATCH`, `THUMB_BATCH_DONE`.
+
+## ThumbClient (shared HTTP client)
+- **Signature:** `struct ThumbClient { client: RwLock<Option<reqwest::Client>> }`
+- **Used by:** `download_thumbnails_for_gids`, `get_page_thumbnail`, Tauri managed state
+- **Purpose:** Single `reqwest::Client` instance reused across all thumbnail batches. The reqwest client maintains a persistent connection pool, so TCP/TLS connections to `s.exhentai.org` and `ehgt.org` are reused between scroll batches instead of being torn down and re-established.
+- **Lifecycle:** Built at startup if credentials exist; rebuilt on `login`; cleared on `logout`.
+- **Why it matters:** Rebuilding the client per-call meant every batch started 6 cold TLS connections simultaneously, causing timeouts even though the URLs are publicly accessible.
 
 ## Page thumbnail concurrency
 - Frontend fires up to **6 concurrent** `get_page_thumbnail` requests per batch via `pageThumbs.ts` service.
@@ -138,6 +156,15 @@
 ### Events
 - Emits `image-download-progress` Tauri event: `{ gid, page_index, status, path?, error? }`
 - Status values: `"queued"`, `"downloading"`, `"done"`, `"error"`, `"rate_limited"`
+
+## Local gallery image loading
+- Local galleries (is_local=1) bypass all network-based image pipelines entirely.
+- **Gallery folder naming:** `{library_dir}/{gid}/` — folder name is the numeric gid only. No title component. Unicode/Japanese titles in path components break asset URLs in the Tauri webview, so only ASCII-safe numeric gids are used.
+- **Gallery cover thumbnail (card/detail header):** On queue download, `local_queue.rs` downloads `meta.thumb_url` (the ExHentai gallery thumbnail from gdata) via `http::download_thumbnail` and saves it as `{gallery_folder}/cover_thumb.{ext}`. This path is stored as `galleries.thumb_path`. Fallback to first downloaded page image if thumbnail URL is empty or download fails. Import (`confirm_import_local_folder`) uses the first copied image as fallback (no remote URL available).
+- **Detail page page-preview thumbnails:** `loadLocalPages()` in `GalleryDetail.svelte` fetches all pages via `get_local_gallery_pages(gid)`, sets `pageThumbPaths[idx] = filePath` (raw local path) for display, and sets `pageEntries[idx].image_path = filePath` in shared `detailBatchState`. All state updates happen in the same synchronous loop, so the page preview grid renders with thumbnails immediately when `totalPageCount` is first set.
+- **Reader full-size images:** `buildLocalReaderPages()` builds `GalleryPages` with `image_path` set for every page. `loadImage()` short-circuits to `convertFileSrc(entry.image_path)` — no network calls.
+- **Reader preview strip thumbnails:** `enqueueThumb()` checks `entry.image_path` as fallback when `entry.thumb_url` is null — sets `thumbPaths[pageIdx] = convertFileSrc(entry.image_path)` directly without any IPC or network call.
+- **No network fetching in strip batch loading:** `_fetchStripBatchImpl` skips calling `getGalleryPagesBatch` for local galleries — detected by `gallery.pages[0].image_path && !gallery.pages[0].page_url`.
 
 ## Detail page lazy batch loading
 - Frontend calls `get_gallery_pages_batch(gid, token, detailPage, pagesPerBatch?)` on demand as user scrolls.

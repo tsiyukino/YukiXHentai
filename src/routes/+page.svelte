@@ -17,8 +17,12 @@
   import GalleryDetail from "$lib/components/GalleryDetail.svelte";
   import SettingsPage from "$lib/components/SettingsPage.svelte";
   import HistoryPage from "$lib/components/HistoryPage.svelte";
+  import FavoritesPage from "$lib/components/FavoritesPage.svelte";
   import PlaceholderPage from "$lib/components/PlaceholderPage.svelte";
   import SearchPage from "$lib/components/SearchPage.svelte";
+  import LocalPage from "$lib/components/LocalPage.svelte";
+  import LocalGalleryDetail from "$lib/components/LocalGalleryDetail.svelte";
+  import LocalGalleryReader from "$lib/components/LocalGalleryReader.svelte";
 
   let ready = $state(false);
 
@@ -69,13 +73,13 @@
           {:else if $currentPage === "popular"}
             <PlaceholderPage titleKey="popular_page.title" messageKey="popular_page.coming_soon" icon="popular" />
           {:else if $currentPage === "favorites"}
-            <PlaceholderPage titleKey="favorites_page.title" messageKey="favorites_page.empty" icon="favorites" />
+            <FavoritesPage />
           {:else if $currentPage === "watched"}
             <PlaceholderPage titleKey="watched_page.title" messageKey="watched_page.coming_soon" icon="watched" />
           {:else if $currentPage === "history"}
             <HistoryPage />
           {:else if $currentPage === "downloads"}
-            <PlaceholderPage titleKey="downloads_page.title" messageKey="downloads_page.empty" icon="downloads" />
+            <LocalPage />
           {:else if $currentPage === "settings"}
             <SettingsPage />
           {/if}
@@ -89,6 +93,10 @@
 
 <!-- Reader overlay (rendered on top when active) -->
 <GalleryReader />
+
+<!-- Local library detail and reader overlays (fully offline, independent of online flow) -->
+<LocalGalleryDetail />
+<LocalGalleryReader />
 
 <style>
   :root,

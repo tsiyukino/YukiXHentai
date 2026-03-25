@@ -39,6 +39,24 @@ Interfaces = IPC commands, DB schema, Rust public types, Svelte stores, config k
 - Use configurable delays between requests; never parallel requests to same endpoint
 - Thumbnails: 300px on long edge default, stored in sharded content-addressable cache
 
+## ⚠️ IPC serialization: snake_case fields, camelCase params — NOT the same thing
+This is the single most common source of bugs. Know the difference:
+
+| What | Case | Example |
+|---|---|---|
+| IPC command **param names** in `invoke()` | camelCase | `invoke("get_foo", { myParam: x })` |
+| Rust **struct field names** serialized in return values | snake_case | `{ page_index: 0, file_path: "..." }` |
+
+Tauri auto-converts **param names** from camelCase → snake_case at the boundary.
+Tauri does **NOT** convert **struct field names** — they serialize exactly as written in Rust.
+
+**Rules:**
+- Frontend `invoke("cmd", { camelCaseParams })` → Rust receives `snake_case_params`. ✓
+- Rust returns `struct { snake_case_field }` → frontend receives `{ snake_case_field }`. ✓
+- TypeScript interfaces for return types **must use snake_case** to match Rust struct fields.
+- TypeScript `invoke()` argument objects **must use camelCase** for param names.
+- NEVER write `interface LocalPage { pageIndex: number }` when Rust has `page_index: i32`. That produces `undefined` for every field and causes downstream errors (duplicate keys, broken images, etc.).
+
 ## .doc/ quick reference
 | Need to know... | Read |
 |---|---|

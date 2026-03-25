@@ -1,3 +1,5 @@
+pub mod read_cache;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 

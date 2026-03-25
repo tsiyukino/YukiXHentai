@@ -5,7 +5,7 @@
 
 use scraper::{Html, Selector};
 
-use crate::models::{Gallery, Tag};
+use crate::models::{FavoriteFolder, Gallery, Tag};
 
 /// Parsed result from a gallery listing page.
 pub struct ListingPage {
@@ -150,6 +150,10 @@ fn parse_gallery_row(row: &scraper::ElementRef) -> Option<Gallery> {
         file_count,
         file_size: None,
         tags,
+        is_local: None,
+        description: None,
+        origin: None,
+        remote_gid: None,
     })
 }
 
@@ -841,6 +845,30 @@ pub fn parse_showpage_response(i3: &str) -> Result<ImagePageResult, String> {
 /// Helper to avoid repeating Selector::parse().unwrap().
 fn sel(s: &str) -> Selector {
     Selector::parse(s).expect("invalid CSS selector")
+}
+
+/// Parse favorite folder names and counts from a favorites.php page.
+/// Selector: `.nosel > .fp` — each `.fp` element contains count (first child) and name (last child).
+/// The last element from the site is not a real folder, so we take at most 10 and ignore extras.
+pub fn parse_favorite_folders(html: &str) -> Result<Vec<FavoriteFolder>, String> {
+    let document = Html::parse_document(html);
+    let fp_sel = sel(".nosel > .fp");
+
+    let mut folders = Vec::new();
+    for (i, fp_el) in document.select(&fp_sel).enumerate() {
+        if i >= 10 { break; }
+        let children: Vec<_> = fp_el.child_elements().collect();
+        if children.len() < 2 { continue; }
+        let count_text = children[0].text().collect::<String>().trim().to_string();
+        let name_text = children[children.len() - 1].text().collect::<String>().trim().to_string();
+        let count = count_text.parse::<i32>().unwrap_or(0);
+        folders.push(FavoriteFolder {
+            index: i as u8,
+            name: name_text,
+            count,
+        });
+    }
+    Ok(folders)
 }
 
 #[cfg(test)]

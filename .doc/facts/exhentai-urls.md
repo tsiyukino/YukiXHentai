@@ -6,7 +6,8 @@
 - E-Hentai (public mirror): `https://e-hentai.org/`
 - API endpoint (exhentai): `https://exhentai.org/api.php`
 - API endpoint (e-hentai): `https://api.e-hentai.org/api.php`
-- Thumbnail CDN: `ehgt.org`
+- Gallery cover thumbnail CDN: `s.exhentai.org` (no auth required)
+- Detail page preview thumbnail CDN: `ehgt.org` (no auth required)
 
 ## Gallery detail page
 - URL: `https://exhentai.org/g/{gid}/{token}/`

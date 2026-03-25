@@ -33,6 +33,18 @@ pub struct Gallery {
     pub file_count: i32,
     pub file_size: Option<i64>,
     pub tags: Vec<Tag>,
+    /// Whether this is a locally-imported gallery (1 = local).
+    #[serde(default)]
+    pub is_local: Option<i32>,
+    /// Gallery description (from API or local import).
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Origin site identifier (e.g. "exhentai"). Set on locally-downloaded galleries.
+    #[serde(default)]
+    pub origin: Option<String>,
+    /// Remote gallery ID on the origin site. For ExHentai downloads this equals gid.
+    #[serde(default)]
+    pub remote_gid: Option<i64>,
 }
 
 /// A namespaced tag (e.g. "female:glasses").
@@ -332,4 +344,137 @@ pub struct SearchHistoryEntry {
     pub id: i64,
     pub query: String,
     pub searched_at: i64,
+}
+
+// ── Favorites types ────────────────────────────────────────────────────
+
+/// One of the 10 cloud favorite folders.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FavoriteFolder {
+    /// 0–9 folder index.
+    pub index: u8,
+    pub name: String,
+    pub count: i32,
+}
+
+/// Cached cloud favorite entry stored in the local DB.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CloudFavorite {
+    pub gid: i64,
+    pub token: String,
+    /// Folder index 0–9.
+    pub favcat: u8,
+    /// Personal note (may be empty).
+    pub favnote: String,
+    /// Unix timestamp when added/updated locally.
+    pub added_at: i64,
+}
+
+/// Favorite status for a single gallery, returned by get_favorite_status.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FavoriteStatus {
+    pub gid: i64,
+    /// None = not favorited; Some(0–9) = folder index.
+    pub favcat: Option<u8>,
+    /// Current note (empty if not favorited or no note set).
+    pub favnote: String,
+}
+
+/// Result of a favorites page fetch (browse cloud favorites).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FavoritesResult {
+    pub galleries: Vec<Gallery>,
+    pub folders: Vec<FavoriteFolder>,
+    pub has_more: bool,
+    pub next_url: Option<String>,
+}
+
+// ── Local gallery types ────────────────────────────────────────────────────
+
+/// A single page from a locally-imported gallery.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocalPage {
+    pub gid: i64,
+    pub page_index: i32,
+    pub file_path: String,
+    pub source_url: Option<String>,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+}
+
+/// Patch struct for updating gallery metadata fields.
+/// Only Some fields are updated; None fields are left unchanged.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GalleryMetadataPatch {
+    pub title: Option<String>,
+    pub title_jpn: Option<String>,
+    pub category: Option<String>,
+    pub uploader: Option<String>,
+    pub description: Option<String>,
+    pub tags_add: Option<Vec<Tag>>,
+    pub tags_remove: Option<Vec<Tag>>,
+}
+
+/// Read cache statistics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReadCacheStats {
+    pub used_bytes: i64,
+    pub max_bytes: i64,
+    pub file_count: i64,
+}
+
+/// Preview of a folder being imported as a local gallery.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportPreview {
+    pub detected_title: String,
+    pub detected_gid: Option<i64>,
+    pub detected_token: Option<String>,
+    pub metadata_found: bool,
+    pub page_count: usize,
+    pub sample_filenames: Vec<String>,
+}
+
+/// An entry in the download queue.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueueEntry {
+    pub gid: i64,
+    pub token: Option<String>,
+    pub title: Option<String>,
+    pub already_local: bool,
+}
+
+/// Result of resolving a gallery token.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolvedGallery {
+    pub gid: i64,
+    pub token: Option<String>,
+    pub title: Option<String>,
+    pub error: Option<String>,
+}
+
+/// A single entry to submit for batch download.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubmitEntry {
+    pub gid: i64,
+    pub token: String,
+}
+
+/// Result of a batch download queue submission.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubmitResult {
+    pub queued: i64,
+    pub skipped_already_local: i64,
+}
+
+/// Status of the local download queue.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DownloadQueueStatus {
+    pub queued: i64,
+    pub downloading: i64,
+    pub completed: i64,
+    pub failed: i64,
+    pub current_gid: Option<i64>,
+    pub current_title: Option<String>,
+    pub current_page: Option<i32>,
+    pub total_pages: Option<i32>,
 }

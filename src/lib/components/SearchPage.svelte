@@ -17,7 +17,7 @@
     emptySearchSortFetchProgress,
   } from "$lib/stores/search";
   import type { SearchSortField } from "$lib/stores/search";
-  import { detailGallery } from "$lib/stores/detail";
+  import { detailGallery, detailOpenedAsLocal } from "$lib/stores/detail";
   import { viewMode, cardSize } from "$lib/stores/ui";
   import GalleryCard from "./GalleryCard.svelte";
   import GalleryListItem from "./GalleryListItem.svelte";
@@ -396,6 +396,7 @@
   }
 
   function handleOpenGallery(gallery: Gallery) {
+    $detailOpenedAsLocal = false;
     $detailGallery = gallery;
   }
 

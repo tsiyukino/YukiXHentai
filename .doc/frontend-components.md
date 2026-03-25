@@ -1,5 +1,5 @@
 # Frontend Components
-> Last updated: 2026-03-24 (fix Bug A: detailBatchState not wiped on g=null close; fix Bug B: setActiveDetailGallery(null) guarded so reader slot not overwritten) | Affects: src/lib/components/GalleryDetail.svelte
+> Last updated: 2026-03-25 (LocalGalleryCard, LocalGalleryDetail, LocalGalleryReader added; library.db separation; is_local routing) | Affects: src/lib/components/
 
 ## Design System
 - **Theming:** CSS custom properties on `:root` with `data-theme` attribute (`"light"` | `"dark"`). All colors use `var(--*)` — no hardcoded colors in components.
@@ -79,7 +79,11 @@
 - **Used by:** `+page.svelte`
 - **Notes:** Two modes controlled by `detailExpanded` store + `fullPage` prop:
   - **Collapsed** (default, `fullPage=false`): Slide-in fixed side panel from right (520px). Renders with backdrop overlay outside `<main>`.
-  - **Expanded** (`fullPage=true`): Full-page inline view. Page content in `<main>` is hidden via `.page-content.hidden`; detail fills entire content area as a flex child. No overlay, no fixed positioning, no animation. Back/Escape collapses back to panel mode (sets `detailExpanded=false`) rather than closing.
+  - **Expanded** (`fullPage=true`): Full-page inline view. Page content in `<main>` is hidden via `.page-content.hidden`; detail fills entire content area as a flex child. No overlay, no fixed positioning, no animation.
+  - **Expand is sticky:** `detailExpanded` persists in the store and is never reset on gallery open/close. Once the user expands, every subsequently opened gallery opens in full-page mode. The only way to leave expanded mode is the collapse button (compress icon → `toggleExpanded` sets `detailExpanded=false`, keeps detail open as side panel) or the back button.
+  - **Back button (full-page mode):** calls `handleCollapse` — sets `detailGallery=null` only, does NOT touch `detailExpanded` — closes detail and returns to the gallery. On reopen, the gallery opens in full-page mode again (expand is still sticky).
+  - **Collapse button:** calls `toggleExpanded` — sets `detailExpanded=false` only — returns to side-panel mode while keeping the same gallery open.
+  - **Escape key:** same as back button in full-page mode; same as close in panel mode.
   - `+page.svelte` passes `fullPage={$detailExpanded && !!$detailGallery}`. Single component instance always rendered inside `<main>` — no mount/unmount on expand/collapse.
   - Preview thumbnail size configurable (80–200px, default 120) via `detailPreviewSize` store.
   - **Lazy batch loading:** On open, calls `getGalleryPagesBatch(gid, token, 0)` to fetch first 20 page entries + total_pages. Renders placeholder slots for all pages immediately based on total count. Each batch gets one IntersectionObserver (rootMargin 400px) that watches **all** thumbnails in that batch range — any thumbnail entering view triggers `getGalleryPagesBatch`, not just the first one. Never fetches ahead of scroll position. Page thumb paths stored in local `pageThumbPaths: Record<number, string>` (raw paths) and mirrored to the `detailPageThumbs` store on every write so GalleryReader can read them.
@@ -90,7 +94,8 @@
   - **Thumbnail cache preservation:** When detail closes due to reader open, `detailPageThumbs` and `detailBatchState` are NOT wiped. On return from reader, `detailPageThumbs.gid` check restores `pageThumbPaths` by spreading the FULL store paths record (`{ ...existingThumbs.paths }`), which includes any paths written by the reader's strip during the session — not just the detail's own downloads. This prevents redundant re-fetches of thumbs already loaded by the reader. Both reads use `get()` (non-reactive).
   - **Store update discipline:** `pageThumbs` service updates `detailPageThumbs` in-place on each download. `detailBatchState` scalar fields updated via spread. Both avoid wholesale replacement to prevent spurious re-renders.
   - **Cancellation:** Tracks `alive` flag. On close/destroy: disconnects all IntersectionObservers, clears `setThumbReadyCallback(null)`. `setActiveDetailGallery(null)` and `detailBatchState.set(null)` only called when reader is NOT open — when reader opens, both are preserved so the reader inherits the active slot and can call `setActiveDetailGallery(gid)` without a race condition. In-flight downloads in the `pageThumbs` service are dropped via gid mismatch when the gallery changes.
-  - Action buttons: Read, Download*, Favorite*, Rate*, Search Similar* (*disabled placeholders). Escape collapses (full-page) or closes (panel).
+  - Action buttons: Read, Download*, Favorite*, Rate*, Search Similar* (*disabled placeholders). Escape: closes entirely in full-page mode (same as back button), closes in panel mode.
+  - **z-index:** Collapsed overlay 500, panel 510. Full-page mode: `z-index: auto` (position static). `FavoriteDialog` uses z-index 600/601 to ensure it always renders above the detail panel regardless of mode.
 
 ## GalleryReader
 - **Props:** none (uses reader stores)
@@ -111,6 +116,11 @@
 - **`stripFetchInFlight` map:** `Map<detailPage, Promise<void>>`. `fetchStripBatch` is a thin wrapper that checks this map first and returns the existing promise if one is already in flight for that batch. `_fetchStripBatchImpl` does the actual IPC work. `loadImage` calls `fetchStripBatch` (not the impl directly) when a page's batch hasn't been fetched yet — this ensures IntersectionObserver-triggered fetches and image-load-triggered fetches share the same promise and never duplicate the IPC call. Map is cleared on gallery change.
 - **Stub-page image loading:** If `loadImage` is called for a page whose batch hasn't been fetched yet (`entry.page_url` empty after checking `detailBatchState`), it awaits `fetchStripBatch(gid, dp)` for that page's batch (dp = `Math.floor(pageIdx / pagesPerBatch)`), then re-reads the entry. If `page_url` is still empty after the batch fetch (e.g. cancelled), the load silently returns rather than calling `get_gallery_image` with an empty URL.
 - **Navigation flow:** Grid → Detail → Reader → (back/Escape) → Detail → (back/Escape) → Grid. When the reader is opened from GalleryDetail, the source `Gallery` object is saved in `readerSourceGallery` store. On close to detail: `detailBatchState` preserved, `detailGallery` restored, batch observers disconnected. On close to home/search (no source): `setActiveDetailGallery(null)` + `detailBatchState.set(null)` cancel all pending downloads.
+
+## FavoriteDialog
+- **Props:** `{ gid: number, token: string, currentFavcat: number | null, currentNote: string, onClose: () => void, onUpdated: (favcat, favnote) => void }`
+- **Used by:** `GalleryDetail.svelte`
+- **Notes:** Modal dialog for adding/changing/removing a gallery from a favorite folder. Fixed-position backdrop + centered dialog. Loads folder names via `getFavoriteFolders()` on mount; falls back to 10 generated "Favorite N" entries on error. Save calls `addFavorite`; Remove calls `removeFavorite`. Escape key calls `onClose`. z-index: backdrop 600, dialog 601 — must stay above GalleryDetail panel (510) and overlay (500) in all modes including full-page (z-index: auto). Do NOT lower z-index below 600.
 
 ## FilterPanel
 - **Props:** `{ onClose: () => void, onSort?: () => void }`
@@ -161,6 +171,30 @@
 - **Tag click from GalleryCard:** Adds the tag to `searchIncludeTags` (green chip) and navigates to search, instead of setting raw text in the search bar.
 - **Notes:** Results in VirtualGrid/VirtualList. Infinite scroll via cursor-based pagination. Cooldown guard (`SEARCH_COOLDOWN_MS = 2000`). Gid deduplication. Client-side hide filter. Viewport-driven thumbnail downloading.
 - **Sort feature:** Inline sort bar shown below toolbar when `hasSearched && !$searchSortActive`. Controls: field dropdown (Date/Rating/Pages/Title), direction toggle (Asc/Desc), preset buttons (100/250/500/1000), free-form count input, Sort button. `handleSearchSort()` follows the same 4-step pattern as GalleryGrid: **(1) Fetch** — if `$searchResults.length < count`, fetch via `searchExhentai` with current `lastCombinedQuery`/`$searchNextUrl`/`$searchCategoryMask`/`$searchAdvancedOptions` until count reached or `$searchHasMore` false; uses `get(searchResults)` after each await to avoid stale closure. **(2) Sort** — `applySortToList(get(searchResults).slice(0, count), ...)` → stored in local `sortedUnfiltered`. **(3) Render** — set `searchSortActive=true`; `$effect` watching `searchSortActive`+`sortedUnfiltered`+`debouncedHideFilter` writes `$searchSortedGalleries`. **(4)** Hide filter changes reactively re-filter `sortedUnfiltered`. Progress overlay same as GalleryGrid (position: absolute, inset 0, z-index 50). Sort banner: "Sorted by {field} · {count} results" + Clear button. `onScrollNearEnd` no-op while sort active. Sort state cleared on new search execution. No date-range mode (count-only).
+
+## LocalGalleryCard
+- **Props:** `{ gallery: Gallery }`
+- **Events:** none (sets `$localDetailGallery` store directly on click)
+- **Used by:** `LocalPage.svelte` (card grid view)
+- **Notes:** Local-only card variant — does NOT use `GalleryCard`. Uses `convertFileSrc(gallery.thumb_path)` directly (no `thumbSrc()` utility, no remote URL fallback — local galleries always have a local thumb). Sets `$localDetailGallery = gallery` on click. No search-tag navigation, no `ReadProgress` display. Same visual structure as `GalleryCard` (3:4 aspect thumb, category pill, title, lang badge, page count, tag pills). CSS `contain: layout style paint` + `content-visibility: auto`.
+
+## LocalPage
+- **Props:** none
+- **Events:** none (uses `localDetailGallery` store)
+- **Used by:** `+page.svelte` (downloads nav)
+- **Notes:** Renders local gallery grid/list. Uses `LocalGalleryCard` (not `GalleryCard`) for card mode. List mode still uses `GalleryListItem` via `openDetail` callback (sets `$localDetailGallery`). Download queue status banner. Import folder dialog. Queue download overlay. `libraryRefreshTick` store triggers full reload after delete.
+
+## LocalGalleryDetail
+- **Props:** none (reads `$localDetailGallery` store)
+- **Events:** none
+- **Used by:** `+page.svelte` (always rendered, outside main layout)
+- **Notes:** Fixed right-side panel (520px). Fully offline — no ExHentai calls. Cover image via `convertFileSrc(gallery.thumb_path)`; fallback to `convertFileSrc(pages[0].file_path)` if no thumb. Calls `get_local_gallery_pages(gid)` on open. Page previews via `convertFileSrc(page.file_path)` per page. Actions: Read (opens `LocalGalleryReader`), Edit Metadata, Delete. On Read/open-page: saves gallery to `localReaderSourceGallery` store, sets `$localReaderGallery`, clears `$localDetailGallery`. On delete: increments `libraryRefreshTick`. Reading progress via `get_read_progress(gid, true)` / `start_reading_session(gid, now, true)` — `isLocal=true` routes to `library.db`. **Field names:** `LocalPage` fields are snake_case (`page_index`, `file_path`) — never camelCase.
+
+## LocalGalleryReader
+- **Props:** none (reads `$localReaderGallery` store)
+- **Events:** none
+- **Used by:** `+page.svelte` (always rendered, outside main layout, z-index 1000)
+- **Notes:** Full-screen overlay, same UI as `GalleryReader`. Fully offline — images loaded via `convertFileSrc(page.file_path)` only. Lazy loading: `loadImage(idx)` / `enqueueThumb(idx)` guard against undefined `file_path`. No IPC image downloads, no `ImageDownloadQueue`, no cancellation tokens. On close: saves progress via `updateReadProgress({...}, true)`, restores `$localDetailGallery` from `$localReaderSourceGallery`. Reading progress routed to `library.db` via `isLocal=true`.
 
 ## PlaceholderPage
 - **Props:** `{ titleKey: string, messageKey: string, icon?: string }`

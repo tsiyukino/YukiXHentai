@@ -9,7 +9,7 @@
     "favorites": "收藏",
     "watched": "关注",
     "history": "历史",
-    "downloads": "下载",
+    "downloads": "本地库",
     "settings": "设置"
   },
   "auth": {
@@ -83,7 +83,10 @@
     "rating_count": "评分数",
     "uploaded": "上传日期",
     "tags": "标签",
-    "previews": "预览"
+    "previews": "预览",
+    "download_queued": "已加入下载队列",
+    "download_already_local": "已在本地库中",
+    "download_local": "已在库中"
   },
   "reader": {
     "page_of": "{current} / {total}",
@@ -158,7 +161,16 @@
   },
   "favorites_page": {
     "title": "收藏",
-    "empty": "暂无收藏。"
+    "empty": "暂无收藏。",
+    "all": "全部",
+    "load_more": "加载更多"
+  },
+  "favorites_dialog": {
+    "title": "添加到收藏",
+    "note": "备注",
+    "note_placeholder": "个人备注（可选）...",
+    "save": "保存",
+    "remove": "从收藏中移除"
   },
   "watched_page": {
     "title": "关注",
@@ -191,5 +203,71 @@
     "confirm": "确认",
     "close": "关闭",
     "back": "返回"
+  },
+  "local": {
+    "title": "本地库",
+    "gallery_count": "{count} 个画廊",
+    "filter_placeholder": "按标题、分类、标签筛选...",
+    "import_folder": "导入文件夹",
+    "import_json": "从 JSON 导入",
+    "queue_download": "批量下载",
+    "edit_metadata": "编辑元数据",
+    "empty_title": "本地库为空",
+    "empty_hint": "导入文件夹或批量下载以构建您的库。",
+    "import_preview_title": "导入预览",
+    "import_confirm": "确认导入",
+    "import_cancel": "取消",
+    "detected_title": "检测到的标题",
+    "page_count": "{count} 页",
+    "sample_files": "文件（前20个）",
+    "metadata_found": "找到 metadata.json",
+    "no_metadata": "未找到 metadata.json — 将使用文件夹名",
+    "insert_pages": "插入页面",
+    "insert_at_end": "末尾",
+    "insert_position": "插入到第几页之后",
+    "page_index": "第 {n} 页",
+    "remove_page": "删除页面",
+    "remove_page_confirm": "从磁盘删除此页面？",
+    "cover": "封面",
+    "change_cover": "更改封面",
+    "tags_from_exh": "来自 ExHentai 的标签（只读）",
+    "tags_local": "您的标签",
+    "add_tag": "添加标签",
+    "tag_namespace": "命名空间（可选）",
+    "tag_value": "标签值",
+    "save": "保存",
+    "unsaved_changes": "您有未保存的更改。确定关闭？",
+    "description": "描述",
+    "folder_path_label": "文件夹路径",
+    "folder_path_placeholder": "例如 C:\\Users\\你的名字\\Pictures\\gallery"
+  },
+  "queue": {
+    "title": "批量下载",
+    "manual_tab": "手动输入",
+    "json_tab": "JSON 文件",
+    "textarea_placeholder": "每行输入一个画廊 URL 或 ID。\n支持的格式：\nhttps://exhentai.org/g/1234567/abcdef1234/\n1234567:abcdef1234\n1234567",
+    "pick_json": "选择 JSON 文件",
+    "resolve_all": "解析全部",
+    "queue_all": "加入队列",
+    "clear": "清空",
+    "close": "关闭",
+    "download_originals": "下载原图",
+    "subfolder": "库子文件夹（可选）",
+    "status_pending": "待处理",
+    "status_resolving": "解析中...",
+    "status_ready": "就绪",
+    "status_already_local": "已在本地",
+    "status_failed": "失败",
+    "summary": "{ready} 就绪 · {alreadyLocal} 已在本地 · {failed} 失败 · {resolving} 解析中",
+    "close_confirm": "不加入队列就关闭？",
+    "queued_count": "已加入 {count} 个画廊"
+  },
+  "download_banner": {
+    "downloading": "正在下载：{title}",
+    "page_progress": "第 {current} / {total} 页",
+    "pause": "暂停",
+    "resume": "继续",
+    "cancel": "取消",
+    "cancel_confirm": "取消所有下载？"
   }
 }

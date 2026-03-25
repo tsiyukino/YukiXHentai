@@ -14,3 +14,6 @@ export const detailPreviewSize = writable<number>(120);
 /** Color theme: "light" or "dark". Default: "light". Persisted via IPC. */
 export type Theme = "light" | "dark";
 export const theme = writable<Theme>("light");
+
+/** Incremented when the local library needs a full refresh (after delete or download complete). */
+export const libraryRefreshTick = writable<number>(0);

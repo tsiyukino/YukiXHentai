@@ -1,10 +1,21 @@
 # Conventions
 > Last updated: 2026-03-21 | Affects: all modules
 
-## IPC param naming
-- **Rule:** Rust commands use `snake_case` params. Tauri auto-converts from frontend `camelCase`. Frontend `invoke()` calls use `camelCase` keys.
-- **Used by:** all IPC commands and `src/lib/api/` wrappers
-- **Notes:** e.g. Rust `ipb_member_id` ↔ frontend `ipbMemberId`
+## IPC serialization rules — READ THIS FIRST
+
+Two separate conventions apply at the IPC boundary. Confusing them produces `undefined` fields and silent breakage.
+
+### Command param names (invoke arguments)
+- **Rule:** Frontend `invoke()` uses **camelCase** keys. Tauri auto-converts them to `snake_case` before passing to the Rust handler.
+- **Example:** `invoke("get_foo", { myGalleryId: 1 })` → Rust receives `my_gallery_id: i64`.
+- **Applies to:** All `invoke()` calls in `src/lib/api/`.
+
+### Return value / struct field names
+- **Rule:** Rust struct fields are serialized **as-is** (snake_case). Tauri does NOT rename them. TypeScript interfaces for return types **must use snake_case**.
+- **Example:** Rust `struct LocalPage { page_index: i32, file_path: String }` → frontend receives `{ page_index: 0, file_path: "..." }`. TypeScript interface must declare `page_index` and `file_path`, NOT `pageIndex` / `filePath`.
+- **Applies to:** All TypeScript interfaces in `src/lib/api/` that model Rust return types.
+- **Wrong:** `interface LocalPage { pageIndex: number; filePath: string }` — every field is `undefined`.
+- **Right:** `interface LocalPage { page_index: number; file_path: string }`
 
 ## API wrappers
 - **Rule:** All `invoke()` calls go through typed wrappers in `src/lib/api/`. Components never call `invoke()` directly.

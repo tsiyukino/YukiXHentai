@@ -6,15 +6,18 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::config::ConfigState;
 use crate::db::DbState;
+use crate::db::library::LibraryDbState;
 use crate::download::ImageDownloadQueue;
 use crate::http;
 use crate::http::{GdataRateLimiter, RateLimiter};
 use crate::images::{OriginalsCache, PageThumbCache, ThumbCache};
 use crate::models::{
-    AdvancedSearchOptions, ExhCookies, ExhSearchResult, FilterParams, FilterPreset, Gallery,
-    GalleryPage, GalleryPages, GalleryPageEntry, GalleryPagesBatchEvent,
-    GalleryPagesBatchResult, LoginResult, ReadProgress, ReadingSession, SearchHistoryEntry,
-    SortParams, SyncPageResult, SyncProgress, SyncResult, TagSuggestion,
+    AdvancedSearchOptions, CloudFavorite, DownloadQueueStatus, ExhCookies, ExhSearchResult,
+    FavoriteFolder, FavoritesResult, FavoriteStatus, FilterParams, FilterPreset, Gallery,
+    GalleryMetadataPatch, GalleryPage, GalleryPages, GalleryPageEntry, GalleryPagesBatchEvent,
+    GalleryPagesBatchResult, ImportPreview, LocalPage, LoginResult, ReadCacheStats, ReadProgress,
+    ReadingSession, ResolvedGallery, SearchHistoryEntry, SortParams, SubmitEntry, SubmitResult,
+    SyncPageResult, SyncProgress, SyncResult, Tag, TagSuggestion,
 };
 
 /// Tracks which gallery's page thumbnails are currently being fetched,
@@ -71,6 +74,36 @@ pub struct DefaultCacheDir {
     pub path: std::path::PathBuf,
 }
 
+/// Shared HTTP client for thumbnail downloads (gallery covers + page previews).
+/// Built once on login and reused across all calls so the connection pool
+/// (keepalive to s.exhentai.org / ehgt.org) is preserved between batches.
+/// Wrapped in RwLock so login can atomically replace it.
+pub struct ThumbClient {
+    pub client: tokio::sync::RwLock<Option<reqwest::Client>>,
+}
+
+impl ThumbClient {
+    pub fn new() -> Self {
+        Self { client: tokio::sync::RwLock::new(None) }
+    }
+
+    pub async fn set(&self, client: reqwest::Client) {
+        *self.client.write().await = Some(client);
+    }
+
+    pub async fn clear(&self) {
+        *self.client.write().await = None;
+    }
+
+    /// Return a clone of the client, or build a cookieless fallback.
+    pub async fn get_or_fallback(&self) -> reqwest::Client {
+        if let Some(c) = self.client.read().await.as_ref() {
+            return c.clone();
+        }
+        reqwest::Client::new()
+    }
+}
+
 /// Tracks the next-page cursor for incremental sync.
 /// Stores the full next-page URL from the #unext pagination link.
 pub struct SyncCursor {
@@ -85,6 +118,7 @@ pub async fn login(
     ipb_pass_hash: String,
     igneous: String,
     config_state: State<'_, ConfigState>,
+    thumb_client: State<'_, ThumbClient>,
 ) -> Result<LoginResult, String> {
     let cookies = ExhCookies {
         ipb_member_id,
@@ -99,6 +133,10 @@ pub async fn login(
                 config.auth.set_cookies(&cookies);
             }
             config_state.save()?;
+            // Build and cache a shared thumbnail client for this session.
+            if let Ok(client) = http::build_client(&cookies) {
+                thumb_client.set(client).await;
+            }
             Ok(LoginResult {
                 success: true,
                 message: "Logged in successfully.".into(),
@@ -112,12 +150,16 @@ pub async fn login(
 }
 
 #[tauri::command]
-pub async fn logout(config_state: State<'_, ConfigState>) -> Result<LoginResult, String> {
+pub async fn logout(
+    config_state: State<'_, ConfigState>,
+    thumb_client: State<'_, ThumbClient>,
+) -> Result<LoginResult, String> {
     {
         let mut config = config_state.config.lock().map_err(|e| e.to_string())?;
         config.auth.clear();
     }
     config_state.save()?;
+    thumb_client.clear().await;
     Ok(LoginResult {
         success: true,
         message: "Logged out.".into(),
@@ -252,7 +294,7 @@ async fn download_thumbs_sequential(
             tracing::info!("THUMB_DOWNLOAD: gid={}, url={}", gid, thumb_url);
 
             let result = tokio::time::timeout(
-                std::time::Duration::from_secs(10),
+                std::time::Duration::from_secs(20),
                 client.get(thumb_url.as_str()).send(),
             )
             .await;
@@ -562,19 +604,15 @@ pub async fn sync_next_page(
 pub async fn download_thumbnails_for_gids(
     gids: Vec<i64>,
     app: AppHandle,
-    config_state: State<'_, ConfigState>,
     db_state: State<'_, Arc<DbState>>,
     thumb_cache: State<'_, ThumbCache>,
+    thumb_client: State<'_, ThumbClient>,
 ) -> Result<usize, String> {
     if gids.is_empty() {
         return Ok(0);
     }
 
-    let cookies = {
-        let config = config_state.config.lock().map_err(|e| e.to_string())?;
-        config.auth.to_cookies().ok_or_else(|| "Not logged in.".to_string())?
-    };
-    let client = http::build_client(&cookies)?;
+    let client = thumb_client.get_or_fallback().await;
 
     // Look up galleries from DB to get their thumb_urls.
     let galleries = db_state.get_galleries_by_gids(&gids)?;
@@ -704,9 +742,9 @@ pub async fn get_page_thumbnail(
     gid: i64,
     page_index: i32,
     thumb_url: String,
-    config_state: State<'_, ConfigState>,
     page_thumb_cache: State<'_, PageThumbCache>,
     cancellation: State<'_, PageThumbCancellation>,
+    thumb_client: State<'_, ThumbClient>,
 ) -> Result<String, String> {
     // Check if this request has been cancelled.
     {
@@ -721,11 +759,7 @@ pub async fn get_page_thumbnail(
         return Ok(path);
     }
 
-    let cookies = {
-        let config = config_state.config.lock().map_err(|e| e.to_string())?;
-        config.auth.to_cookies().ok_or_else(|| "Not logged in.".to_string())?
-    };
-    let client = http::build_client(&cookies)?;
+    let client = thumb_client.get_or_fallback().await;
 
     // Parse sprite info if present.
     let sprite_info = parse_sprite_thumb_url(&thumb_url);
@@ -1262,25 +1296,43 @@ pub async fn register_download_session(
 #[tauri::command]
 pub async fn update_read_progress(
     progress: ReadProgress,
+    is_local: bool,
     db_state: State<'_, Arc<DbState>>,
+    lib_db: State<'_, Arc<LibraryDbState>>,
 ) -> Result<(), String> {
-    db_state.update_read_progress(&progress)
+    if is_local {
+        lib_db.update_read_progress(&progress)
+    } else {
+        db_state.update_read_progress(&progress)
+    }
 }
 
 #[tauri::command]
 pub async fn get_read_progress(
     gid: i64,
+    is_local: bool,
     db_state: State<'_, Arc<DbState>>,
+    lib_db: State<'_, Arc<LibraryDbState>>,
 ) -> Result<Option<ReadProgress>, String> {
-    db_state.get_read_progress(gid)
+    if is_local {
+        lib_db.get_read_progress(gid)
+    } else {
+        db_state.get_read_progress(gid)
+    }
 }
 
 #[tauri::command]
 pub async fn get_read_progress_batch(
     gids: Vec<i64>,
+    is_local: bool,
     db_state: State<'_, Arc<DbState>>,
+    lib_db: State<'_, Arc<LibraryDbState>>,
 ) -> Result<Vec<ReadProgress>, String> {
-    db_state.get_read_progress_batch(&gids)
+    if is_local {
+        lib_db.get_read_progress_batch(&gids)
+    } else {
+        db_state.get_read_progress_batch(&gids)
+    }
 }
 
 // ── Reading session commands ──────────────────────────────────────────────
@@ -1289,9 +1341,15 @@ pub async fn get_read_progress_batch(
 pub async fn start_reading_session(
     gid: i64,
     opened_at: i64,
+    is_local: bool,
     db_state: State<'_, Arc<DbState>>,
+    lib_db: State<'_, Arc<LibraryDbState>>,
 ) -> Result<i64, String> {
-    db_state.start_reading_session(gid, opened_at)
+    if is_local {
+        lib_db.start_reading_session(gid, opened_at)
+    } else {
+        db_state.start_reading_session(gid, opened_at)
+    }
 }
 
 #[tauri::command]
@@ -1299,9 +1357,15 @@ pub async fn end_reading_session(
     session_id: i64,
     closed_at: i64,
     pages_read: i32,
+    is_local: bool,
     db_state: State<'_, Arc<DbState>>,
+    lib_db: State<'_, Arc<LibraryDbState>>,
 ) -> Result<(), String> {
-    db_state.end_reading_session(session_id, closed_at, pages_read)
+    if is_local {
+        lib_db.end_reading_session(session_id, closed_at, pages_read)
+    } else {
+        db_state.end_reading_session(session_id, closed_at, pages_read)
+    }
 }
 
 #[tauri::command]
@@ -1405,6 +1469,41 @@ pub async fn set_cache_dir(
                 std::fs::create_dir_all(p).map_err(|e| format!("Cannot create directory: {}", e))?;
             }
             config.storage.cache_dir = Some(path);
+        }
+    }
+    config_state.save()?;
+    Ok(())
+}
+
+/// Get the current library directory path.
+/// Returns the custom path from config if set, otherwise the platform default.
+#[tauri::command]
+pub async fn get_library_dir(
+    config_state: State<'_, ConfigState>,
+    data_local_dir: State<'_, DataLocalDir>,
+) -> Result<String, String> {
+    let config = config_state.config.lock().map_err(|e| e.to_string())?;
+    let path = crate::library::library_dir(&config, &data_local_dir.path);
+    Ok(path.to_string_lossy().to_string())
+}
+
+/// Set a custom library directory. Pass empty string to reset to default.
+/// Does NOT move existing gallery files.
+#[tauri::command]
+pub async fn set_library_dir(
+    path: String,
+    config_state: State<'_, ConfigState>,
+) -> Result<(), String> {
+    {
+        let mut config = config_state.config.lock().map_err(|e| e.to_string())?;
+        if path.is_empty() {
+            config.storage.library_dir = None;
+        } else {
+            let p = std::path::Path::new(&path);
+            if !p.exists() {
+                std::fs::create_dir_all(p).map_err(|e| format!("Cannot create directory: {}", e))?;
+            }
+            config.storage.library_dir = Some(path);
         }
     }
     config_state.save()?;
@@ -1618,4 +1717,849 @@ pub async fn search_tags_autocomplete(
     db_state: State<'_, Arc<DbState>>,
 ) -> Result<Vec<TagSuggestion>, String> {
     db_state.search_tags_autocomplete(&query, 10)
+}
+
+// ── Favorites commands ────────────────────────────────────────────────────
+
+/// Get the local favorite status for a gallery (fast, no network).
+#[tauri::command]
+pub async fn get_favorite_status(
+    gid: i64,
+    db_state: State<'_, Arc<DbState>>,
+) -> Result<FavoriteStatus, String> {
+    match db_state.get_cloud_favorite(gid)? {
+        Some(fav) => Ok(FavoriteStatus {
+            gid,
+            favcat: Some(fav.favcat),
+            favnote: fav.favnote,
+        }),
+        None => Ok(FavoriteStatus {
+            gid,
+            favcat: None,
+            favnote: String::new(),
+        }),
+    }
+}
+
+/// Add or move a gallery to a favorite folder (cloud + local DB).
+/// `favcat`: 0–9 folder index.
+/// `favnote`: personal note (may be empty).
+#[tauri::command]
+pub async fn add_favorite(
+    gid: i64,
+    token: String,
+    favcat: u8,
+    favnote: String,
+    config_state: State<'_, ConfigState>,
+    db_state: State<'_, Arc<DbState>>,
+    rate_limiter: State<'_, Arc<RateLimiter>>,
+) -> Result<(), String> {
+    let cookies = {
+        let config = config_state.config.lock().map_err(|e| e.to_string())?;
+        config.auth.to_cookies().ok_or_else(|| "Not logged in.".to_string())?
+    };
+    let client = http::build_client(&cookies)?;
+
+    http::submit_favorite(&client, &rate_limiter, gid, &token, Some(favcat), &favnote).await?;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+
+    db_state.upsert_cloud_favorite(&CloudFavorite {
+        gid,
+        token,
+        favcat,
+        favnote,
+        added_at: now,
+    })?;
+
+    Ok(())
+}
+
+/// Remove a gallery from favorites (cloud + local DB).
+#[tauri::command]
+pub async fn remove_favorite(
+    gid: i64,
+    token: String,
+    config_state: State<'_, ConfigState>,
+    db_state: State<'_, Arc<DbState>>,
+    rate_limiter: State<'_, Arc<RateLimiter>>,
+) -> Result<(), String> {
+    let cookies = {
+        let config = config_state.config.lock().map_err(|e| e.to_string())?;
+        config.auth.to_cookies().ok_or_else(|| "Not logged in.".to_string())?
+    };
+    let client = http::build_client(&cookies)?;
+
+    http::submit_favorite(&client, &rate_limiter, gid, &token, None, "").await?;
+
+    db_state.remove_cloud_favorite(gid)?;
+
+    Ok(())
+}
+
+/// Fetch the favorites page from ExHentai (cloud browse).
+/// `favcat`: None = all folders; Some(0–9) = specific folder.
+/// `next_url`: cursor URL from a previous result for pagination.
+/// Returns galleries + folder metadata + pagination cursor.
+#[tauri::command]
+pub async fn fetch_favorites(
+    favcat: Option<u8>,
+    next_url: Option<String>,
+    config_state: State<'_, ConfigState>,
+    db_state: State<'_, Arc<DbState>>,
+    rate_limiter: State<'_, Arc<RateLimiter>>,
+) -> Result<FavoritesResult, String> {
+    let cookies = {
+        let config = config_state.config.lock().map_err(|e| e.to_string())?;
+        config.auth.to_cookies().ok_or_else(|| "Not logged in.".to_string())?
+    };
+    let client = http::build_client(&cookies)?;
+
+    let url = match next_url {
+        Some(ref u) => u.clone(),
+        None => http::build_favorites_url(favcat),
+    };
+
+    let (listing, folders) = http::fetch_favorites_page(&client, &rate_limiter, &url).await?;
+
+    let has_more = listing.next_url.is_some();
+    let result_next_url = listing.next_url;
+
+    // Upsert galleries to DB (browse source) and persist favorite status.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+
+    for gallery in &listing.galleries {
+        db_state.upsert_gallery_browse(gallery)?;
+        // Store as favorites with folder 0 if not already known (folder index
+        // not determinable from listing HTML alone without sprite parsing).
+        // Only insert if not already tracked to avoid overwriting known folder index.
+        if db_state.get_cloud_favorite(gallery.gid)?.is_none() {
+            db_state.upsert_cloud_favorite(&CloudFavorite {
+                gid: gallery.gid,
+                token: gallery.token.clone(),
+                favcat: favcat.unwrap_or(0),
+                favnote: String::new(),
+                added_at: now,
+            })?;
+        }
+    }
+
+    // Persist folder metadata if we got it.
+    for folder in &folders {
+        db_state.upsert_favorite_folder(folder)?;
+    }
+
+    // Re-read from DB with thumb_paths.
+    let gids: Vec<i64> = listing.galleries.iter().map(|g| g.gid).collect();
+    let result_galleries = if gids.is_empty() {
+        Vec::new()
+    } else {
+        db_state.get_galleries_by_gids(&gids)?
+    };
+
+    // Merge stored folders with freshly fetched ones; fall back to DB if none returned.
+    let result_folders = if folders.is_empty() {
+        db_state.get_favorite_folders()?
+    } else {
+        folders
+    };
+
+    Ok(FavoritesResult {
+        galleries: result_galleries,
+        folders: result_folders,
+        has_more,
+        next_url: result_next_url,
+    })
+}
+
+/// Get cached favorite folders from the local DB.
+#[tauri::command]
+pub async fn get_favorite_folders(
+    db_state: State<'_, Arc<DbState>>,
+) -> Result<Vec<FavoriteFolder>, String> {
+    db_state.get_favorite_folders()
+}
+
+// ── Read cache management ─────────────────────────────────────────────────
+
+/// Get current read cache stats (used_bytes, max_bytes, file_count).
+#[tauri::command]
+pub async fn get_read_cache_stats(
+    db_state: State<'_, Arc<DbState>>,
+    config_state: State<'_, ConfigState>,
+) -> Result<ReadCacheStats, String> {
+    let (used_bytes, file_count) = db_state.read_cache_stats()?;
+    let max_bytes = {
+        let config = config_state.config.lock().map_err(|e| e.to_string())?;
+        (config.storage.read_cache_max_mb.clamp(128, 4096) * 1024 * 1024) as i64
+    };
+    Ok(ReadCacheStats { used_bytes, max_bytes, file_count })
+}
+
+/// Set the maximum read cache size in megabytes (128–4096).
+#[tauri::command]
+pub async fn set_read_cache_max_mb(
+    max_mb: u64,
+    config_state: State<'_, ConfigState>,
+) -> Result<(), String> {
+    let clamped = max_mb.clamp(128, 4096);
+    {
+        let mut config = config_state.config.lock().map_err(|e| e.to_string())?;
+        config.storage.read_cache_max_mb = clamped;
+    }
+    config_state.save()?;
+    Ok(())
+}
+
+/// Clear the originals read cache (files + DB index + gallery_pages image_path entries).
+#[tauri::command]
+pub async fn clear_read_cache(
+    db_state: State<'_, Arc<DbState>>,
+) -> Result<i64, String> {
+    let (paths, bytes_freed) = db_state.read_cache_clear_and_unlink()?;
+    for path in paths {
+        let _ = std::fs::remove_file(&path);
+    }
+    tracing::info!("clear_read_cache: freed {} bytes", bytes_freed);
+    Ok(bytes_freed)
+}
+
+// ── Local gallery commands ────────────────────────────────────────────────
+
+/// Get a page of locally-imported galleries.
+#[tauri::command]
+pub async fn get_local_galleries(
+    offset: i64,
+    limit: i64,
+    lib_db: State<'_, Arc<LibraryDbState>>,
+) -> Result<GalleryPage, String> {
+    lib_db.get_local_galleries(offset, limit)
+}
+
+/// Get all pages for a local gallery.
+#[tauri::command]
+pub async fn get_local_gallery_pages(
+    gid: i64,
+    lib_db: State<'_, Arc<LibraryDbState>>,
+) -> Result<Vec<LocalPage>, String> {
+    lib_db.get_local_gallery_pages(gid)
+}
+
+/// Update metadata fields for a gallery. Only provided (non-null) fields are changed.
+/// Also rewrites metadata.json in the gallery's local folder.
+#[tauri::command]
+pub async fn update_gallery_metadata(
+    gid: i64,
+    patch: GalleryMetadataPatch,
+    lib_db: State<'_, Arc<LibraryDbState>>,
+    config_state: State<'_, ConfigState>,
+    data_local_dir: State<'_, DataLocalDir>,
+) -> Result<(), String> {
+    lib_db.update_gallery_metadata(gid, &patch)?;
+
+    // Rewrite metadata.json if this is a local gallery.
+    if let Some(gallery) = lib_db.get_gallery_by_gid(gid)? {
+        let config = config_state.config.lock().map_err(|e| e.to_string())?.clone();
+        let local_pages = lib_db.get_local_gallery_pages(gid)?;
+        let meta = gallery_to_meta(&gallery, &local_pages);
+        // Try to write to the stored local_folder if available.
+        let folder = lib_db.get_local_folder(gid)?;
+        let folder_path = match folder {
+            Some(ref f) if !f.is_empty() => std::path::PathBuf::from(f),
+            _ => crate::library::gallery_folder(&config, &data_local_dir.path, gid),
+        };
+        let _ = crate::library::write_metadata_json(&folder_path, &meta);
+    }
+    Ok(())
+}
+
+/// Reorder pages of a local gallery. new_order is a list of current page_index values in new order.
+/// Also rewrites metadata.json.
+#[tauri::command]
+pub async fn reorder_local_pages(
+    gid: i64,
+    new_order: Vec<i32>,
+    lib_db: State<'_, Arc<LibraryDbState>>,
+    config_state: State<'_, ConfigState>,
+    data_local_dir: State<'_, DataLocalDir>,
+) -> Result<(), String> {
+    lib_db.reorder_local_pages(gid, &new_order)?;
+    rewrite_local_metadata(gid, &lib_db, &config_state, &data_local_dir).await?;
+    Ok(())
+}
+
+/// Insert new image files into a local gallery after a given page index.
+/// Reads image dimensions using the image crate.
+/// Copies files to the gallery folder and inserts rows.
+#[tauri::command]
+pub async fn insert_local_pages(
+    gid: i64,
+    file_paths: Vec<String>,
+    insert_after_index: i32,
+    lib_db: State<'_, Arc<LibraryDbState>>,
+    config_state: State<'_, ConfigState>,
+    data_local_dir: State<'_, DataLocalDir>,
+) -> Result<Vec<LocalPage>, String> {
+    // Get gallery folder.
+    let _gallery = lib_db.get_gallery_by_gid(gid)?
+        .ok_or_else(|| format!("Gallery {} not found", gid))?;
+
+    let config = config_state.config.lock().map_err(|e| e.to_string())?.clone();
+    let folder = crate::library::gallery_folder(&config, &data_local_dir.path, gid);
+    std::fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
+
+    let mut page_data: Vec<(String, Option<String>, Option<i32>, Option<i32>)> = Vec::new();
+
+    for src_path in &file_paths {
+        let src = std::path::Path::new(src_path);
+        let filename = src.file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| format!("Invalid file path: {}", src_path))?;
+
+        let dest = folder.join(filename);
+
+        // Copy file if it's not already in the gallery folder.
+        if src != dest {
+            std::fs::copy(src, &dest).map_err(|e| format!("Failed to copy {}: {}", src_path, e))?;
+        }
+
+        // Read image dimensions.
+        let (width, height) = read_image_dimensions(&dest);
+        page_data.push((
+            dest.to_string_lossy().to_string(),
+            None, // source_url
+            width,
+            height,
+        ));
+    }
+
+    let inserted = lib_db.insert_local_pages(gid, &page_data, insert_after_index)?;
+
+    // Update file_count.
+    let new_count = lib_db.get_local_gallery_pages(gid)?.len() as i32;
+    lib_db.set_file_count(gid, new_count)?;
+
+    rewrite_local_metadata(gid, &lib_db, &config_state, &data_local_dir).await?;
+    Ok(inserted)
+}
+
+/// Remove a page from a local gallery. Optionally deletes the file.
+#[tauri::command]
+pub async fn remove_local_page(
+    gid: i64,
+    page_index: i32,
+    delete_file: bool,
+    lib_db: State<'_, Arc<LibraryDbState>>,
+    config_state: State<'_, ConfigState>,
+    data_local_dir: State<'_, DataLocalDir>,
+) -> Result<(), String> {
+    let file_path = lib_db.remove_local_page(gid, page_index)?;
+
+    if delete_file {
+        if let Some(path) = file_path {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+
+    // Update file_count.
+    let new_count = lib_db.get_local_gallery_pages(gid)?.len() as i32;
+    lib_db.set_file_count(gid, new_count)?;
+
+    rewrite_local_metadata(gid, &lib_db, &config_state, &data_local_dir).await?;
+    Ok(())
+}
+
+/// Set the cover image for a local gallery.
+/// Copies the file to gallery_folder/cover.{ext}, generates a thumbnail, updates galleries.thumb_path.
+#[tauri::command]
+pub async fn set_local_gallery_cover(
+    gid: i64,
+    file_path: String,
+    lib_db: State<'_, Arc<LibraryDbState>>,
+    config_state: State<'_, ConfigState>,
+    data_local_dir: State<'_, DataLocalDir>,
+) -> Result<String, String> {
+    let _gallery = lib_db.get_gallery_by_gid(gid)?
+        .ok_or_else(|| format!("Gallery {} not found", gid))?;
+
+    let config = config_state.config.lock().map_err(|e| e.to_string())?.clone();
+    let folder = crate::library::gallery_folder(&config, &data_local_dir.path, gid);
+    std::fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
+
+    let src = std::path::Path::new(&file_path);
+    let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("jpg");
+    let dest = folder.join(format!("cover.{}", ext));
+
+    if src != dest.as_path() {
+        std::fs::copy(src, &dest).map_err(|e| format!("Failed to copy cover: {}", e))?;
+    }
+
+    let thumb_path = dest.to_string_lossy().to_string();
+    lib_db.set_thumb_path(gid, &thumb_path)?;
+
+    Ok(thumb_path)
+}
+
+// ── Import commands ───────────────────────────────────────────────────────
+
+/// Scan a folder and return an import preview (without importing).
+#[tauri::command]
+pub async fn import_local_folder(
+    folder_path: String,
+) -> Result<ImportPreview, String> {
+    let folder = std::path::Path::new(&folder_path);
+    if !folder.exists() || !folder.is_dir() {
+        return Err(format!("Folder does not exist: {}", folder_path));
+    }
+
+    // Check for metadata.json.
+    let meta = crate::library::read_metadata_json(folder)?;
+
+    // Scan image files.
+    let images = crate::library::scan_image_files(folder)?;
+    let page_count = images.len();
+
+    let sample_filenames: Vec<String> = images.iter()
+        .take(5)
+        .map(|(name, _)| name.clone())
+        .collect();
+
+    let detected_title = meta.as_ref()
+        .map(|m| m.title.clone())
+        .unwrap_or_else(|| {
+            folder.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("Unknown")
+                .to_string()
+        });
+
+    let detected_gid = meta.as_ref().and_then(|m| m.gid);
+    let detected_token = meta.as_ref().and_then(|m| m.token.clone());
+    let metadata_found = meta.is_some();
+
+    Ok(ImportPreview {
+        detected_title,
+        detected_gid,
+        detected_token,
+        metadata_found,
+        page_count,
+        sample_filenames,
+    })
+}
+
+/// Confirm import of a local folder as a gallery.
+/// Copies image files to the library folder, upserts gallery in DB, generates thumb, writes metadata.json.
+#[tauri::command]
+pub async fn confirm_import_local_folder(
+    folder_path: String,
+    gid: i64,
+    token: String,
+    title: String,
+    category: String,
+    lib_db: State<'_, Arc<LibraryDbState>>,
+    config_state: State<'_, ConfigState>,
+    data_local_dir: State<'_, DataLocalDir>,
+) -> Result<Gallery, String> {
+    let src_folder = std::path::Path::new(&folder_path);
+    if !src_folder.exists() || !src_folder.is_dir() {
+        return Err(format!("Source folder does not exist: {}", folder_path));
+    }
+
+    let config = config_state.config.lock().map_err(|e| e.to_string())?.clone();
+    let dest_folder = crate::library::gallery_folder(&config, &data_local_dir.path, gid);
+    std::fs::create_dir_all(&dest_folder).map_err(|e| e.to_string())?;
+
+    // Read existing metadata.json (if any).
+    let existing_meta = crate::library::read_metadata_json(src_folder)?;
+
+    // Scan image files.
+    let images = crate::library::scan_image_files(src_folder)?;
+    let file_count = images.len() as i32;
+
+    // Copy images to dest folder and collect page data.
+    let mut page_data: Vec<(String, Option<String>, Option<i32>, Option<i32>)> = Vec::new();
+    let mut page_metas: Vec<crate::library::LocalPageMeta> = Vec::new();
+
+    for (i, (filename, src_path)) in images.iter().enumerate() {
+        let dest_path = dest_folder.join(filename);
+        if src_path != &dest_path {
+            std::fs::copy(src_path, &dest_path)
+                .map_err(|e| format!("Failed to copy {}: {}", filename, e))?;
+        }
+        let (width, height) = read_image_dimensions(&dest_path);
+        let dest_str = dest_path.to_string_lossy().to_string();
+        page_data.push((dest_str.clone(), None, width, height));
+        page_metas.push(crate::library::LocalPageMeta {
+            index: i,
+            filename: filename.clone(),
+            source_url: None,
+            width: width.map(|w| w as u32),
+            height: height.map(|h| h as u32),
+        });
+    }
+
+    // Use first page file in the gallery folder as the thumbnail — fully local, no cache.
+    let thumb_path = page_data.first().map(|(p, _, _, _)| p.clone());
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+
+    // Build gallery to upsert.
+    let tags: Vec<Tag> = existing_meta.as_ref()
+        .map(|m| m.tags.iter().map(|t| Tag::parse(t)).collect())
+        .unwrap_or_default();
+
+    let description = existing_meta.as_ref().and_then(|m| m.description.clone());
+
+    let gallery = Gallery {
+        gid,
+        token: token.clone(),
+        title: title.clone(),
+        title_jpn: existing_meta.as_ref().and_then(|m| m.title_jpn.clone()),
+        category: category.clone(),
+        thumb_url: String::new(),
+        thumb_path: thumb_path.clone(),
+        uploader: existing_meta.as_ref().and_then(|m| m.uploader.clone()),
+        posted: now,
+        rating: 0.0,
+        file_count,
+        file_size: None,
+        tags: tags.clone(),
+        is_local: Some(1),
+        description: description.clone(),
+        // Preserve origin/remote_gid from existing metadata.json if present.
+        origin: existing_meta.as_ref().and_then(|m| m.origin.clone()),
+        remote_gid: existing_meta.as_ref().and_then(|m| m.remote_gid),
+    };
+
+    let folder_str = dest_folder.to_string_lossy().to_string();
+    lib_db.upsert_local_gallery(&gallery, &folder_str, description.as_deref())?;
+
+    // Insert pages starting at index -1 (so they begin at 0).
+    // Clear any existing local pages first.
+    {
+        let conn = lib_db.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute("DELETE FROM local_gallery_pages WHERE gid = ?1", rusqlite::params![gid])
+            .map_err(|e| e.to_string())?;
+    }
+    lib_db.insert_local_pages(gid, &page_data, -1)?;
+
+    // Write metadata.json to dest folder.
+    let meta = crate::library::LocalGalleryMeta {
+        gid: Some(gid),
+        token: Some(token),
+        title: title.clone(),
+        title_jpn: gallery.title_jpn.clone(),
+        category,
+        uploader: gallery.uploader.clone(),
+        description,
+        origin: existing_meta.as_ref().and_then(|m| m.origin.clone()),
+        remote_gid: existing_meta.as_ref().and_then(|m| m.remote_gid),
+        tags: tags.iter().map(|t| t.full_name()).collect(),
+        pages: page_metas,
+    };
+    let _ = crate::library::write_metadata_json(&dest_folder, &meta);
+
+    // Re-read from DB to return consistent state.
+    lib_db.get_gallery_by_gid(gid)?
+        .ok_or_else(|| "Gallery not found in DB after import".to_string())
+}
+
+// ── Queue download commands ───────────────────────────────────────────────
+
+/// Parse a JSON string of download queue entries.
+/// Input: JSON array of objects with "gid" (number or string) and optional "token" fields.
+#[tauri::command]
+pub async fn parse_download_queue_json(
+    json_text: String,
+    lib_db: State<'_, Arc<LibraryDbState>>,
+) -> Result<Vec<crate::models::QueueEntry>, String> {
+    let values: Vec<serde_json::Value> = serde_json::from_str(&json_text)
+        .map_err(|e| format!("Invalid JSON: {}", e))?;
+
+    let mut entries = Vec::new();
+    for val in values {
+        let gid: i64 = match val.get("gid") {
+            Some(serde_json::Value::Number(n)) => n.as_i64().ok_or("gid not i64")?,
+            Some(serde_json::Value::String(s)) => s.parse::<i64>().map_err(|e| e.to_string())?,
+            _ => return Err("Each entry must have a numeric gid field".into()),
+        };
+        let token = val.get("token").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let title = val.get("title").and_then(|v| v.as_str()).map(|s| s.to_string());
+
+        let already_local = lib_db.is_local(gid)?;
+
+        entries.push(crate::models::QueueEntry {
+            gid,
+            token,
+            title,
+            already_local,
+        });
+    }
+    Ok(entries)
+}
+
+/// Resolve the token for a gallery gid by fetching the canonical URL from ExHentai.
+#[tauri::command]
+pub async fn resolve_gallery_token(
+    gid: i64,
+    config_state: State<'_, ConfigState>,
+    rate_limiter: State<'_, Arc<RateLimiter>>,
+) -> Result<ResolvedGallery, String> {
+    let cookies = {
+        let config = config_state.config.lock().map_err(|e| e.to_string())?;
+        config.auth.to_cookies().ok_or_else(|| "Not logged in.".to_string())?
+    };
+    let client = http::build_client(&cookies)?;
+
+    // Use rate limiter before fetching.
+    rate_limiter.wait().await;
+
+    let url = format!("https://exhentai.org/g/{}/", gid);
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("HTTP error: {}", e))?;
+
+    if !response.status().is_success() {
+        return Ok(ResolvedGallery {
+            gid,
+            token: None,
+            title: None,
+            error: Some(format!("HTTP {}", response.status())),
+        });
+    }
+
+    let html = response.text().await.map_err(|e| e.to_string())?;
+
+    // Parse canonical link: <link rel="canonical" href="https://exhentai.org/g/{gid}/{token}/">
+    let token = parse_canonical_token(&html, gid);
+    let title = parse_gallery_title_from_html(&html);
+
+    Ok(ResolvedGallery {
+        gid,
+        token,
+        title,
+        error: None,
+    })
+}
+
+fn parse_canonical_token(html: &str, gid: i64) -> Option<String> {
+    let prefix = format!("https://exhentai.org/g/{}/", gid);
+    // Find <link rel="canonical" href="...">
+    for line in html.lines() {
+        if line.contains("rel=\"canonical\"") {
+            if let Some(start) = line.find(&prefix) {
+                let rest = &line[start + prefix.len()..];
+                let token: String = rest.chars().take_while(|c| c.is_alphanumeric()).collect();
+                if !token.is_empty() {
+                    return Some(token);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn parse_gallery_title_from_html(html: &str) -> Option<String> {
+    // Look for <title> tag.
+    if let Some(start) = html.find("<title>") {
+        let rest = &html[start + 7..];
+        if let Some(end) = rest.find("</title>") {
+            let raw = &rest[..end];
+            // Strip " - ExHentai.org" suffix if present.
+            let title = raw.trim().trim_end_matches(" - ExHentai.org").trim().to_string();
+            if !title.is_empty() {
+                return Some(title);
+            }
+        }
+    }
+    None
+}
+
+/// Submit a batch of gid/token pairs to the local download queue.
+#[tauri::command]
+pub async fn submit_download_queue(
+    entries: Vec<SubmitEntry>,
+    lib_db: State<'_, Arc<LibraryDbState>>,
+    local_queue: State<'_, crate::download::local_queue::LocalDownloadQueue>,
+) -> Result<SubmitResult, String> {
+    let mut queued = 0i64;
+    let mut skipped = 0i64;
+
+    for entry in entries {
+        let already_local = lib_db.is_local(entry.gid)?;
+
+        if already_local {
+            skipped += 1;
+        } else {
+            local_queue.enqueue(entry.gid, entry.token, None);
+            queued += 1;
+        }
+    }
+
+    Ok(SubmitResult {
+        queued,
+        skipped_already_local: skipped,
+    })
+}
+
+/// Get the current status of the local download queue.
+#[tauri::command]
+pub async fn get_download_queue_status(
+    local_queue: State<'_, crate::download::local_queue::LocalDownloadQueue>,
+) -> Result<DownloadQueueStatus, String> {
+    Ok(local_queue.status())
+}
+
+/// Pause the local download queue.
+#[tauri::command]
+pub async fn pause_download_queue(
+    local_queue: State<'_, crate::download::local_queue::LocalDownloadQueue>,
+) -> Result<(), String> {
+    local_queue.pause();
+    Ok(())
+}
+
+/// Resume the local download queue.
+#[tauri::command]
+pub async fn resume_download_queue(
+    local_queue: State<'_, crate::download::local_queue::LocalDownloadQueue>,
+) -> Result<(), String> {
+    local_queue.resume();
+    Ok(())
+}
+
+/// Cancel queued downloads. If gid is None, cancel all pending.
+#[tauri::command]
+pub async fn cancel_download_queue(
+    gid: Option<i64>,
+    local_queue: State<'_, crate::download::local_queue::LocalDownloadQueue>,
+) -> Result<(), String> {
+    local_queue.cancel(gid);
+    Ok(())
+}
+
+// ── Shared state for data_local_dir ──────────────────────────────────────
+
+/// Stores the platform data_local_dir for use by library functions.
+pub struct DataLocalDir {
+    pub path: std::path::PathBuf,
+}
+
+// ── Private helpers ───────────────────────────────────────────────────────
+
+/// Read image dimensions using the image crate. Returns (width, height) or (None, None) on failure.
+fn read_image_dimensions(path: &std::path::Path) -> (Option<i32>, Option<i32>) {
+    match image::image_dimensions(path) {
+        Ok((w, h)) => (Some(w as i32), Some(h as i32)),
+        Err(_) => (None, None),
+    }
+}
+
+/// Helper to rewrite metadata.json for a local gallery.
+async fn rewrite_local_metadata(
+    gid: i64,
+    lib_db: &Arc<LibraryDbState>,
+    config_state: &State<'_, ConfigState>,
+    data_local_dir: &State<'_, DataLocalDir>,
+) -> Result<(), String> {
+    if let Some(gallery) = lib_db.get_gallery_by_gid(gid)? {
+        let config = config_state.config.lock().map_err(|e| e.to_string())?.clone();
+        let local_pages = lib_db.get_local_gallery_pages(gid)?;
+        let meta = gallery_to_meta(&gallery, &local_pages);
+
+        let folder_str = lib_db.get_local_folder(gid)?;
+
+        let folder_path = match folder_str {
+            Some(ref f) if !f.is_empty() => std::path::PathBuf::from(f),
+            _ => crate::library::gallery_folder(&config, &data_local_dir.path, gid),
+        };
+
+        let _ = crate::library::write_metadata_json(&folder_path, &meta);
+    }
+    Ok(())
+}
+
+/// Delete a local gallery from the DB and its folder from disk.
+#[tauri::command]
+pub async fn delete_local_gallery(
+    gid: i64,
+    lib_db: State<'_, Arc<LibraryDbState>>,
+) -> Result<(), String> {
+    // Get the local_folder path before deleting.
+    let local_folder = lib_db.get_local_folder(gid)?;
+
+    // Delete gallery from DB (cascades to local_gallery_pages and related tables).
+    lib_db.delete_gallery(gid)?;
+
+    // Delete folder from disk if it exists.
+    if let Some(folder) = local_folder {
+        let path = std::path::Path::new(&folder);
+        if path.exists() {
+            std::fs::remove_dir_all(path).map_err(|e| e.to_string())?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Convert a Gallery + its local pages to a LocalGalleryMeta for metadata.json.
+fn gallery_to_meta(gallery: &Gallery, pages: &[LocalPage]) -> crate::library::LocalGalleryMeta {
+    let page_metas: Vec<crate::library::LocalPageMeta> = pages.iter().map(|p| {
+        let filename = std::path::Path::new(&p.file_path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+        crate::library::LocalPageMeta {
+            index: p.page_index as usize,
+            filename,
+            source_url: p.source_url.clone(),
+            width: p.width.map(|w| w as u32),
+            height: p.height.map(|h| h as u32),
+        }
+    }).collect();
+
+    crate::library::LocalGalleryMeta {
+        gid: Some(gallery.gid),
+        token: Some(gallery.token.clone()),
+        title: gallery.title.clone(),
+        title_jpn: gallery.title_jpn.clone(),
+        category: gallery.category.clone(),
+        uploader: gallery.uploader.clone(),
+        description: gallery.description.clone(),
+        origin: gallery.origin.clone(),
+        remote_gid: gallery.remote_gid,
+        tags: gallery.tags.iter().map(|t| t.full_name()).collect(),
+        pages: page_metas,
+    }
+}
+
+/// Placeholder: sync a local gallery from its origin site.
+/// Only works for galleries that have an origin and remote_gid set.
+/// Currently a no-op — sync logic will be added per origin site in a future phase.
+#[tauri::command]
+pub async fn sync_local_gallery(
+    gid: i64,
+    lib_db: State<'_, Arc<LibraryDbState>>,
+) -> Result<(), String> {
+    let gallery = lib_db.get_gallery_by_gid(gid)?
+        .ok_or_else(|| format!("Gallery {} not found", gid))?;
+
+    if gallery.origin.is_none() || gallery.remote_gid.is_none() {
+        return Err("Gallery has no origin — cannot sync".to_string());
+    }
+
+    // TODO: dispatch to origin-specific sync handler (Phase 5+).
+    Ok(())
 }

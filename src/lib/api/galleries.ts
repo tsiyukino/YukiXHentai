@@ -20,6 +20,12 @@ export interface Gallery {
   file_count: number;
   file_size: number | null;
   tags: Tag[];
+  /** 1 if this is a locally-downloaded gallery. */
+  is_local?: number;
+  /** Origin site identifier (e.g. "exhentai"). Set on galleries downloaded from a remote site. */
+  origin?: string;
+  /** Remote gallery ID on the origin site. */
+  remote_gid?: number;
 }
 
 export interface SyncResult {

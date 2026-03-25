@@ -35,4 +35,5 @@ anyhow = "1"
 dirs = "6"
 url = "2"
 urlencoding = "2"
+tauri-plugin-dialog = "2"
 

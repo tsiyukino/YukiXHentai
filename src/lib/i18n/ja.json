@@ -9,7 +9,7 @@
     "favorites": "お気に入り",
     "watched": "ウォッチ",
     "history": "履歴",
-    "downloads": "ダウンロード",
+    "downloads": "ローカル",
     "settings": "設定"
   },
   "auth": {
@@ -83,7 +83,10 @@
     "rating_count": "評価数",
     "uploaded": "アップロード日",
     "tags": "タグ",
-    "previews": "プレビュー"
+    "previews": "プレビュー",
+    "download_queued": "ダウンロードキューに追加しました",
+    "download_already_local": "すでにローカルライブラリにあります",
+    "download_local": "ライブラリ済み"
   },
   "reader": {
     "page_of": "{current} / {total}",
@@ -158,7 +161,16 @@
   },
   "favorites_page": {
     "title": "お気に入り",
-    "empty": "お気に入りはまだありません。"
+    "empty": "お気に入りはまだありません。",
+    "all": "すべて",
+    "load_more": "もっと読み込む"
+  },
+  "favorites_dialog": {
+    "title": "お気に入りに追加",
+    "note": "メモ",
+    "note_placeholder": "個人メモ（任意）...",
+    "save": "保存",
+    "remove": "お気に入りから削除"
   },
   "watched_page": {
     "title": "ウォッチ",
@@ -191,5 +203,71 @@
     "confirm": "確認",
     "close": "閉じる",
     "back": "戻る"
+  },
+  "local": {
+    "title": "ローカルライブラリ",
+    "gallery_count": "{count} 件のギャラリー",
+    "filter_placeholder": "タイトル・カテゴリ・タグでフィルター...",
+    "import_folder": "フォルダーをインポート",
+    "import_json": "JSONからインポート",
+    "queue_download": "ダウンロードキュー",
+    "edit_metadata": "メタデータを編集",
+    "empty_title": "ローカルライブラリは空です",
+    "empty_hint": "フォルダーをインポートするかダウンロードキューを使ってライブラリを構築してください。",
+    "import_preview_title": "インポートプレビュー",
+    "import_confirm": "インポートを確認",
+    "import_cancel": "キャンセル",
+    "detected_title": "検出されたタイトル",
+    "page_count": "{count} ページ",
+    "sample_files": "ファイル（最初の20件）",
+    "metadata_found": "metadata.json が見つかりました",
+    "no_metadata": "metadata.json なし — フォルダー名を使用",
+    "insert_pages": "ページを挿入",
+    "insert_at_end": "末尾",
+    "insert_position": "挿入位置（ページ番号の後）",
+    "page_index": "ページ {n}",
+    "remove_page": "ページを削除",
+    "remove_page_confirm": "このページをディスクから削除しますか？",
+    "cover": "表紙",
+    "change_cover": "表紙を変更",
+    "tags_from_exh": "ExHentai からのタグ（読み取り専用）",
+    "tags_local": "あなたのタグ",
+    "add_tag": "タグを追加",
+    "tag_namespace": "名前空間（任意）",
+    "tag_value": "タグ値",
+    "save": "保存",
+    "unsaved_changes": "未保存の変更があります。閉じてもよいですか？",
+    "description": "説明",
+    "folder_path_label": "フォルダーパス",
+    "folder_path_placeholder": "例: C:\\Users\\あなた\\Pictures\\gallery"
+  },
+  "queue": {
+    "title": "ダウンロードキュー",
+    "manual_tab": "手動入力",
+    "json_tab": "JSONファイル",
+    "textarea_placeholder": "ギャラリーのURLまたはIDを1行ずつ入力してください。\n対応フォーマット：\nhttps://exhentai.org/g/1234567/abcdef1234/\n1234567:abcdef1234\n1234567",
+    "pick_json": "JSONファイルを選択",
+    "resolve_all": "すべて解決",
+    "queue_all": "すべてキューに追加",
+    "clear": "クリア",
+    "close": "閉じる",
+    "download_originals": "オリジナルをダウンロード",
+    "subfolder": "ライブラリサブフォルダー（任意）",
+    "status_pending": "保留中",
+    "status_resolving": "解決中...",
+    "status_ready": "準備完了",
+    "status_already_local": "ローカルにあります",
+    "status_failed": "失敗",
+    "summary": "{ready} 準備完了 · {alreadyLocal} ローカルあり · {failed} 失敗 · {resolving} 解決中",
+    "close_confirm": "キューに追加せずに閉じますか？",
+    "queued_count": "{count} 件のギャラリーをキューに追加しました"
+  },
+  "download_banner": {
+    "downloading": "ダウンロード中: {title}",
+    "page_progress": "{current} / {total} ページ",
+    "pause": "一時停止",
+    "resume": "再開",
+    "cancel": "キャンセル",
+    "cancel_confirm": "すべてのダウンロードをキャンセルしますか？"
   }
 }

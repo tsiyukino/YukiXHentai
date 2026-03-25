@@ -1,0 +1,4 @@
+[env]
+# Increase rustc's thread stack size to avoid STATUS_STACK_BUFFER_OVERRUN
+# when compiling large files (commands/mod.rs ~2600 lines in debug mode).
+RUST_MIN_STACK = "16777216"

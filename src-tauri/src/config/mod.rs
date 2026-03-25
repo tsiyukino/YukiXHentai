@@ -50,6 +50,16 @@ fn default_theme() -> String {
 pub struct StorageConfig {
     /// Custom cache directory. None = platform default.
     pub cache_dir: Option<String>,
+    /// Maximum size of the originals read cache in megabytes. Range: 128–4096. Default: 512.
+    #[serde(default = "default_read_cache_max_mb")]
+    pub read_cache_max_mb: u64,
+    /// Custom library directory. None = platform default data_local_dir/yukixhentai/library.
+    #[serde(default)]
+    pub library_dir: Option<String>,
+}
+
+fn default_read_cache_max_mb() -> u64 {
+    512
 }
 
 /// Authentication section of the config.

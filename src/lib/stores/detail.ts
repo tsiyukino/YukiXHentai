@@ -5,6 +5,11 @@ import type { GalleryPageEntry } from "$lib/api/reader";
 /** Gallery shown in the detail slide-in panel (null = closed). */
 export const detailGallery = writable<Gallery | null>(null);
 
+/** True when the detail was opened from the local library page.
+ *  Controls whether GalleryDetail goes fully offline (no network calls).
+ *  False for all other openers (home, search, favorites, history). */
+export const detailOpenedAsLocal = writable<boolean>(false);
+
 /** Shared page thumbnail paths for the currently open detail gallery.
  *  Values are raw local filesystem paths (not convertFileSrc'd).
  *  Reset when the detail gallery changes. */

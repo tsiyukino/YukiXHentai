@@ -1,5 +1,5 @@
 # IPC Commands
-> Last updated: 2026-03-24 (fix get_gallery_pages_batch DB total_pages; set_active_detail_gallery used by reader) | Affects: src-tauri/src/commands/, src/lib/api/
+> Last updated: 2026-03-25 (is_local routing for reading progress/session commands; library.db separation; folder naming gid-only) | Affects: src-tauri/src/commands/, src/lib/api/, src/lib/components/
 
 ## login
 - **Signature:** `invoke("login", { ipbMemberId, ipbPassHash, igneous }) -> LoginResult`
@@ -27,7 +27,7 @@
 
 ## download_thumbnails_for_gids
 - **Signature:** `invoke("download_thumbnails_for_gids", { gids: number[] }) -> number`
-- **Used by:** `GalleryGrid.svelte` (viewport-driven thumbnail loading)
+- **Used by:** `GalleryGrid.svelte` (viewport-driven thumbnail loading), `FavoritesPage.svelte` (IntersectionObserver-driven thumbnail loading)
 - **Events emitted:** `thumbnail-ready` (per thumbnail, as each download completes)
 - **Notes:** Downloads thumbnails for the specified gallery gids. Looks up galleries from DB to get thumb_urls. Spawns concurrent download in background (IPC returns immediately). Skips already-cached thumbnails (verified on disk with nonzero size). Up to 6 concurrent downloads (semaphore — matches JHentai/EhViewer safe limit for ehgt.org), 10s per-request timeout. Shared pause flag suspends new launches on rate-limit (10s) or 3 consecutive failures (30s). Frontend calls this with only the gids visible in the virtual scroll viewport, debounced at 150ms.
 
@@ -93,26 +93,29 @@
 - **Notes:** Registers a new download session for a gallery. Cancels any previous session for the same gallery, preventing stale downloads from interfering.
 
 ## update_read_progress
-- **Signature:** `invoke("update_read_progress", { progress: ReadProgress }) -> void`
+- **Signature:** `invoke("update_read_progress", { progress: ReadProgress, isLocal: boolean }) -> void`
+- **Notes:** `isLocal=true` routes to `library.db`; `isLocal=false` (default) routes to `yukixhentai.db`.
 
 ## get_read_progress
-- **Signature:** `invoke("get_read_progress", { gid: number }) -> ReadProgress | null`
+- **Signature:** `invoke("get_read_progress", { gid: number, isLocal: boolean }) -> ReadProgress | null`
+- **Notes:** `isLocal=true` routes to `library.db`; `isLocal=false` (default) routes to `yukixhentai.db`.
 
 ## get_read_progress_batch
-- **Signature:** `invoke("get_read_progress_batch", { gids: number[] }) -> ReadProgress[]`
-- **Notes:** Batch load for grid display.
+- **Signature:** `invoke("get_read_progress_batch", { gids: number[], isLocal: boolean }) -> ReadProgress[]`
+- **Notes:** Batch load for grid display. `isLocal=true` routes to `library.db`.
 
 ## start_reading_session
-- **Signature:** `invoke("start_reading_session", { gid: number, openedAt: number }) -> number`
-- **Notes:** Returns session ID.
+- **Signature:** `invoke("start_reading_session", { gid: number, openedAt: number, isLocal: boolean }) -> number`
+- **Notes:** Returns session ID. `isLocal=true` routes to `library.db`.
 
 ## end_reading_session
-- **Signature:** `invoke("end_reading_session", { sessionId: number, closedAt: number, pagesRead: number }) -> void`
+- **Signature:** `invoke("end_reading_session", { sessionId: number, closedAt: number, pagesRead: number, isLocal: boolean }) -> void`
+- **Notes:** `isLocal=true` routes to `library.db`.
 
 ## get_reading_history
 - **Signature:** `invoke("get_reading_history", { limit: number, offset: number }) -> ReadingSession[]`
 - **Used by:** `HistoryPage.svelte`
-- **Notes:** Displayed in History page with GID, date, pages read, duration.
+- **Notes:** Displayed in History page with GID, date, pages read, duration. Reads from `yukixhentai.db` only (online history).
 
 ## get_detail_preview_size
 - **Signature:** `invoke("get_detail_preview_size") -> number`
@@ -169,6 +172,31 @@
 - **Used by:** `SearchPage.svelte` tag input
 - **Notes:** Queries `gallery_tags` table for entries matching `query` as substring of `name` or `namespace:name`. Returns up to 10 distinct `{ namespace, name }` results ordered by name. Used for tag include/exclude chip autocomplete; debounced 200ms on the frontend.
 
+## get_favorite_status
+- **Signature:** `invoke("get_favorite_status", { gid: number }) -> FavoriteStatus`
+- **Used by:** `GalleryDetail.svelte` (on gallery open, fast local DB read)
+- **Notes:** Returns local cached favorite status. No network call. `favcat: null` = not favorited.
+
+## add_favorite
+- **Signature:** `invoke("add_favorite", { gid: number, token: string, favcat: number, favnote: string }) -> void`
+- **Used by:** `FavoriteDialog.svelte`
+- **Notes:** POSTs to ExHentai `gallerypopups.php`, then upserts to local `cloud_favorites` DB. Rate-limited.
+
+## remove_favorite
+- **Signature:** `invoke("remove_favorite", { gid: number, token: string }) -> void`
+- **Used by:** `FavoriteDialog.svelte`
+- **Notes:** POSTs `favcat=favdel` to ExHentai, then removes from local DB. Rate-limited.
+
+## fetch_favorites
+- **Signature:** `invoke("fetch_favorites", { favcat?: number | null, nextUrl?: string | null }) -> FavoritesResult`
+- **Used by:** `FavoritesPage.svelte`
+- **Notes:** GETs `favorites.php` from ExHentai. Cursor-based pagination via `nextUrl`. Upserts galleries to DB. Returns galleries + folder metadata + pagination cursor. Rate-limited.
+
+## get_favorite_folders
+- **Signature:** `invoke("get_favorite_folders") -> FavoriteFolder[]`
+- **Used by:** `FavoriteDialog.svelte`, `FavoritesPage.svelte`
+- **Notes:** Returns cached folder names/counts from local DB. No network call.
+
 ## get_search_history
 - **Signature:** `invoke("get_search_history", { limit?: number }) -> SearchHistoryEntry[]`
 - **Used by:** `SearchPage.svelte` (search input focus dropdown)
@@ -178,3 +206,99 @@
 - **Signature:** `invoke("clear_search_history") -> void`
 - **Used by:** `SearchPage.svelte`
 - **Notes:** Deletes all entries from search_history table.
+
+## get_read_cache_stats
+- **Signature:** `invoke("get_read_cache_stats") -> ReadCacheStats`
+- **Notes:** Returns `{ used_bytes, max_bytes, file_count }`. `max_bytes` derived from `storage.read_cache_max_mb` config.
+
+## set_read_cache_max_mb
+- **Signature:** `invoke("set_read_cache_max_mb", { maxMb: number }) -> void`
+- **Notes:** Updates `storage.read_cache_max_mb` config (clamped 128–4096). Persists to config.toml.
+
+## clear_read_cache
+- **Signature:** `invoke("clear_read_cache") -> number`
+- **Notes:** Deletes all originals cache files tracked in `read_cache_index`, clears `gallery_pages.image_path` entries, removes files from disk. Returns bytes freed.
+
+## get_local_galleries
+- **Signature:** `invoke("get_local_galleries", { offset: number, limit: number }) -> GalleryPage`
+- **Notes:** Returns galleries where `is_local=1`, ordered by posted DESC. Tags include both `gallery_tags` and `local_tags`.
+
+## get_local_gallery_pages
+- **Signature:** `invoke("get_local_gallery_pages", { gid: number }) -> LocalPage[]`
+- **Notes:** Returns all pages for a local gallery from `local_gallery_pages`, ordered by page_index.
+
+## update_gallery_metadata
+- **Signature:** `invoke("update_gallery_metadata", { gid: number, patch: GalleryMetadataPatch }) -> void`
+- **Notes:** Updates only the provided fields. For local galleries, rewrites metadata.json in the gallery folder.
+
+## reorder_local_pages
+- **Signature:** `invoke("reorder_local_pages", { gid: number, newOrder: number[] }) -> void`
+- **Notes:** `newOrder` is a list of current `page_index` values in the desired new order. Rewrites metadata.json.
+
+## insert_local_pages
+- **Signature:** `invoke("insert_local_pages", { gid: number, filePaths: string[], insertAfterIndex: number }) -> LocalPage[]`
+- **Notes:** Copies files to the gallery folder, reads image dimensions, inserts rows. Returns inserted LocalPage objects. Existing pages after insertAfterIndex are renumbered. Rewrites metadata.json.
+
+## remove_local_page
+- **Signature:** `invoke("remove_local_page", { gid: number, pageIndex: number, deleteFile: bool }) -> void`
+- **Notes:** Removes the page row. If `deleteFile=true`, also deletes the file from disk. Renumbers remaining pages. Rewrites metadata.json.
+
+## set_local_gallery_cover
+- **Signature:** `invoke("set_local_gallery_cover", { gid: number, filePath: string }) -> string`
+- **Notes:** Copies the file to `{gallery_folder}/cover.{ext}`, generates a thumbnail (updates `galleries.thumb_path`). Returns the new thumb_path.
+
+## import_local_folder
+- **Signature:** `invoke("import_local_folder", { folderPath: string }) -> ImportPreview`
+- **Notes:** Scans the folder for image files (natural sort). Reads metadata.json if present. Returns preview without importing. No DB changes.
+
+## confirm_import_local_folder
+- **Signature:** `invoke("confirm_import_local_folder", { folderPath: string, gid: number, token: string, title: string, category: string }) -> Gallery`
+- **Notes:** Copies images to `{library_dir}/{gid}/`, upserts gallery in `library.db` (is_local=1), inserts local_gallery_pages rows, generates thumbnail from first image, writes metadata.json. Returns the full Gallery object.
+
+## parse_download_queue_json
+- **Signature:** `invoke("parse_download_queue_json", { jsonText: string }) -> QueueEntry[]`
+- **Notes:** Parses a JSON array of `{ gid, token?, title? }` objects. Checks DB for `already_local` flag on each entry.
+
+## resolve_gallery_token
+- **Signature:** `invoke("resolve_gallery_token", { gid: number }) -> ResolvedGallery`
+- **Notes:** Fetches `https://exhentai.org/g/{gid}/` and parses the canonical `<link>` tag to extract the token. Rate-limited. Returns `{ gid, token?, title?, error? }`.
+
+## submit_download_queue
+- **Signature:** `invoke("submit_download_queue", { entries: SubmitEntry[], downloadOriginals: boolean, subfolder?: string }) -> SubmitResult`
+- **Used by:** `GalleryDetail.svelte` (Download button), `QueueDownloadPage.svelte` (Queue all ready)
+- **Events emitted:** `local-download-progress` (per page during download, and on completion)
+- **Notes:** Enqueues galleries that are not already local. Returns `{ queued, skipped_already_local }`. The background worker in `LocalDownloadQueue` processes jobs sequentially: fetches gdata metadata, fetches all detail pages to get page URLs + imgkeys, downloads each full image, downloads the gallery cover thumbnail (`meta.thumb_url`) into `{gallery_folder}/cover_thumb.{ext}` (falls back to first page image if unavailable), saves to library folder, registers as local gallery in DB.
+
+## get_download_queue_status
+- **Signature:** `invoke("get_download_queue_status") -> DownloadQueueStatus`
+- **Notes:** Returns current snapshot of `LocalDownloadQueue` state. `downloading=1` means a gallery is actively being downloaded; `queued` is the pending count.
+
+## pause_download_queue
+- **Signature:** `invoke("pause_download_queue") -> void`
+
+## resume_download_queue
+- **Signature:** `invoke("resume_download_queue") -> void`
+
+## cancel_download_queue
+- **Signature:** `invoke("cancel_download_queue", { gid?: number | null }) -> void`
+- **Notes:** If `gid` is provided, cancels only that gallery. If null/undefined, cancels all pending.
+
+## get_library_dir
+- **Signature:** `invoke("get_library_dir") -> string`
+- **Used by:** `SettingsPage.svelte`
+- **Notes:** Returns the current library directory. Returns custom path from `[storage].library_dir` config if set, otherwise the platform default (`{data_local_dir}/yukixhentai/library/`).
+
+## set_library_dir
+- **Signature:** `invoke("set_library_dir", { path: string }) -> void`
+- **Used by:** `SettingsPage.svelte`
+- **Notes:** Sets a custom library directory. Pass empty string to reset to platform default. Does NOT move existing gallery files. Validates path exists or creates it. Persists to `[storage].library_dir` in config.toml.
+
+## delete_local_gallery
+- **Signature:** `invoke("delete_local_gallery", { gid: number }) -> void`
+- **Used by:** `GalleryDetail.svelte` (Delete button for local galleries)
+- **Notes:** Deletes the gallery row from DB (cascades to `local_gallery_pages`, tags, history, etc.) and removes the `local_folder` directory from disk. Errors if disk deletion fails. After delete, increments `libraryRefreshTick` store so `LocalPage.svelte` reloads immediately.
+
+## sync_local_gallery
+- **Signature:** `invoke("sync_local_gallery", { gid: number }) -> void`
+- **Used by:** `GalleryDetail.svelte` (Sync button, only shown when `origin` and `remote_gid` are set)
+- **Notes:** Placeholder — checks that `origin` and `remote_gid` exist, then returns OK. Actual sync logic (per-origin site) will be added in a future phase. Only local galleries with `origin`+`remote_gid` set (i.e. downloaded via queue, not manually imported) can be synced.

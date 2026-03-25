@@ -51,6 +51,20 @@ Config file: `{platform_config_dir}/yukixhentai/config.toml`
 
 ### storage.cache_dir
 - **Type:** `Option<String>`
-- **Default:** `None` (uses platform default: `{cache_dir}/yukixhentai/`)
+- **Default:** `None` (uses platform default: `{cache_dir}/yukixhentai/cache/`)
 - **Used by:** `commands/get_cache_dir`, `commands/set_cache_dir`
 - **Notes:** Custom cache directory for thumbnails, page thumbnails, and originals. None = platform default. Requires restart to take effect (caches are initialized at startup). Set via `set_cache_dir` IPC.
+- **Windows note:** On Windows `dirs::cache_dir() == dirs::data_local_dir()`, so the extra `/cache/` suffix ensures cache files (`thumbs/`, `page-thumbs/`, `originals/`) never share a directory with permanent data (`library/`). Clearing the cache can never delete library files.
+
+### storage.read_cache_max_mb
+- **Type:** `u64`
+- **Default:** `512`
+- **Range:** 128–4096
+- **Used by:** `commands/get_read_cache_stats`, `commands/set_read_cache_max_mb`
+- **Notes:** Maximum size of the originals (full-size images) read cache in megabytes. LRU eviction runs after each new save. Set via `set_read_cache_max_mb` IPC.
+
+### storage.library_dir
+- **Type:** `Option<String>`
+- **Default:** `None` (uses `{data_local_dir}/yukixhentai/library/`)
+- **Used by:** `library::library_dir`, `commands/confirm_import_local_folder`, `commands/get_library_dir`, `commands/set_library_dir`, `download::local_queue` worker
+- **Notes:** Root directory for locally-imported galleries. Each gallery gets a subfolder `{gid}_{sanitized_title}/`. None = default location. Set via `set_library_dir` IPC.

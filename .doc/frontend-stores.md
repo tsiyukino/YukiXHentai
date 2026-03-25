@@ -1,5 +1,36 @@
 # Frontend Stores
-> Last updated: 2026-03-23 (sort stores added) | Affects: src/lib/stores/
+> Last updated: 2026-03-25 (localLibrary stores added; detailOpenedAsLocal added) | Affects: src/lib/stores/
+
+## Local library stores (stores/localLibrary.ts)
+
+### localDetailGallery
+- **Shape:** `Writable<Gallery | null>`
+- **Default:** `null`
+- **Used by:** `LocalPage.svelte` (via `LocalGalleryCard` — sets on card click), `LocalGalleryDetail.svelte` (reads; sets null on close)
+- **Notes:** Non-null when the local detail panel is open. Independent from `detailGallery` (online flow). `LocalGalleryCard` sets it directly on click — no `onOpen` callback needed.
+
+### localReaderGallery
+- **Shape:** `Writable<LocalReaderGallery | null>`
+- **Type:** `{ gid: number, title: string, pages: LocalReaderPage[], total_pages: number }`
+- **Default:** `null`
+- **Used by:** `LocalGalleryDetail.svelte` (writer), `LocalGalleryReader.svelte` (reader)
+- **Notes:** Non-null when the local reader is open. Built from `LocalPage[]` returned by `get_local_gallery_pages`. `pages[i].file_path` is the raw filesystem path — **snake_case**, never camelCase.
+
+### localReaderPage
+- **Shape:** `Writable<number>`
+- **Default:** `0`
+- **Used by:** `LocalGalleryDetail.svelte` (sets initial page), `LocalGalleryReader.svelte` (navigation)
+
+### localReaderMode
+- **Shape:** `Writable<"page" | "scroll">`
+- **Default:** `"page"`
+- **Used by:** `LocalGalleryDetail.svelte` (sets on open), `LocalGalleryReader.svelte`
+
+### localReaderSourceGallery
+- **Shape:** `Writable<Gallery | null>`
+- **Default:** `null`
+- **Used by:** `LocalGalleryDetail.svelte` (writer — saves gallery before opening reader), `LocalGalleryReader.svelte` (reader — restores detail on close)
+- **Notes:** Mirrors `readerSourceGallery` in the online reader flow. Set by detail immediately before clearing `$localDetailGallery`. Read and cleared by reader on close to restore the detail panel.
 
 ## Auth stores (stores/auth.ts)
 
@@ -91,6 +122,12 @@
 - **Used by:** `GalleryGrid.svelte`, `GalleryDetail.svelte`, `+page.svelte`
 - **Notes:** Non-null when detail panel is open.
 
+### detailOpenedAsLocal
+- **Shape:** `Writable<boolean>`
+- **Default:** `false`
+- **Used by:** `LocalPage.svelte` (writer: sets true), `GalleryGrid.svelte`, `SearchPage.svelte`, `FavoritesPage.svelte` (writers: set false), `GalleryDetail.svelte` (reader)
+- **Notes:** Set by the opener immediately before setting `detailGallery`. `true` means the gallery was opened from the local library — `GalleryDetail` goes fully offline (local pages from DB, no network calls, delete/edit/sync buttons). `false` means opened from home/search/favorites — normal remote path (fetch metadata + page thumbnails from ExHentai). Must be set before `detailGallery` so `GalleryDetail`'s `$effect` reads the correct value via `get()`.
+
 ### detailPageThumbs
 - **Shape:** `Writable<{ gid: number; paths: Record<number, string> } | null>`
 - **Used by:** `GalleryDetail.svelte`, `GalleryReader.svelte`
@@ -116,7 +153,7 @@
 - **Shape:** `Writable<boolean>`
 - **Default:** false
 - **Used by:** `GalleryDetail.svelte`, `+page.svelte`
-- **Notes:** Controls whether detail panel is in collapsed (side panel) or expanded (full-page) mode. When true, `+page.svelte` hides page content and passes `fullPage=true` to `GalleryDetail`, which renders inline filling the entire content area.
+- **Notes:** Controls whether detail panel is in collapsed (side panel) or expanded (full-page) mode. When true, `+page.svelte` hides page content and passes `fullPage=true` to `GalleryDetail`. **Sticky:** never reset when a gallery opens or closes — once expanded, all subsequently opened galleries open in full-page mode. Only reset to false by the collapse button (`toggleExpanded`). The back button / Escape in full-page mode (`handleCollapse`) sets `detailGallery=null` but does NOT touch `detailExpanded` — so reopening the detail opens it full-page again.
 
 ### detailPreviewSize
 - **Shape:** `Writable<number>`
@@ -124,6 +161,12 @@
 - **Range:** 80–200
 - **Used by:** `GalleryDetail.svelte`, `SettingsPage.svelte`
 - **Notes:** Preview thumbnail size in px. Persisted to config via `set_detail_preview_size` IPC.
+
+### libraryRefreshTick
+- **Shape:** `Writable<number>`
+- **Default:** 0
+- **Used by:** `GalleryDetail.svelte` (writer), `LocalPage.svelte` (reader)
+- **Notes:** Incremented whenever the local library needs a full reload. `GalleryDetail` increments it after `delete_local_gallery` succeeds so `LocalPage` reacts instantly without polling.
 
 ### theme
 - **Shape:** `Writable<Theme>`

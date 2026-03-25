@@ -8,6 +8,7 @@
   import type { Theme } from "$lib/stores/ui";
   import { login, logout } from "$lib/api/auth";
   import { getDetailPreviewSize, setDetailPreviewSize, getCacheDir, setCacheDir, clearImageCache, setTheme } from "$lib/api/reader";
+  import { getReadCacheStats, setReadCacheMaxMb, clearReadCache, getLibraryDir, setLibraryDir, type ReadCacheStats } from "$lib/api/library";
 
   // Account
   let ipbMemberId = $state("");
@@ -25,10 +26,10 @@
   let proxyHost = $state("");
   let proxyPort = $state("");
 
-  // Download placeholders
+  // Download settings
   let downloadDir = $state("");
-  let downloadQuality = $state<"original" | "resampled">("original");
-  let resumeDownloads = $state(true);
+  let downloadDirLoading = $state(false);
+  let downloadDirMessage = $state("");
 
   let activeSection = $state("account");
 
@@ -38,9 +39,22 @@
   let clearingCache = $state(false);
   let cacheMessage = $state("");
 
+  // Read cache state
+  let readCacheStats = $state<ReadCacheStats | null>(null);
+  let readCacheMaxMb = $state(512);
+  let clearingReadCache = $state(false);
+  let readCacheMessage = $state("");
+
   onMount(async () => {
     try {
       cacheDir = await getCacheDir();
+    } catch {}
+    try {
+      readCacheStats = await getReadCacheStats();
+      readCacheMaxMb = Math.round((readCacheStats.maxBytes || 512 * 1024 * 1024) / 1024 / 1024);
+    } catch {}
+    try {
+      downloadDir = await getLibraryDir();
     } catch {}
   });
 
@@ -287,6 +301,60 @@
             <p class="message success">{cacheMessage}</p>
           {/if}
         </div>
+
+        <!-- Read cache -->
+        <div class="field-row">
+          <label class="field-label">Read cache max size</label>
+          <div class="slider-row">
+            <Slider
+              min={128}
+              max={4096}
+              step={64}
+              bind:value={readCacheMaxMb}
+              onChange={async (v) => { readCacheMaxMb = v; try { await setReadCacheMaxMb(v); } catch {} }}
+            />
+            <span class="slider-value">{readCacheMaxMb} MB</span>
+          </div>
+          {#if readCacheStats && readCacheStats.maxBytes > 0}
+            <div class="cache-usage-row">
+              <div class="cache-usage-bar">
+                <div
+                  class="cache-usage-fill"
+                  style="width: {Math.min(100, (readCacheStats.usedBytes / readCacheStats.maxBytes) * 100).toFixed(1)}%"
+                ></div>
+              </div>
+              <span class="cache-usage-label">
+                {(readCacheStats.usedBytes / 1024 / 1024).toFixed(1)} MB / {(readCacheStats.maxBytes / 1024 / 1024).toFixed(0)} MB
+                ({readCacheStats.fileCount} {readCacheStats.fileCount === 1 ? "file" : "files"})
+              </span>
+            </div>
+          {/if}
+          <div>
+            <button
+              class="btn-danger"
+              onclick={async () => {
+                clearingReadCache = true;
+                readCacheMessage = "";
+                try {
+                  const freed = await clearReadCache();
+                  const mb = (freed / 1024 / 1024).toFixed(1);
+                  readCacheMessage = `Cleared — freed ${mb} MB`;
+                  readCacheStats = await getReadCacheStats();
+                } catch (err) {
+                  readCacheMessage = `Error: ${err}`;
+                } finally {
+                  clearingReadCache = false;
+                }
+              }}
+              disabled={clearingReadCache}
+            >
+              {clearingReadCache ? "Clearing..." : "Clear read cache"}
+            </button>
+          </div>
+          {#if readCacheMessage}
+            <p class="message success">{readCacheMessage}</p>
+          {/if}
+        </div>
       </div>
 
     {:else if activeSection === "network"}
@@ -322,28 +390,36 @@
         <div class="field-row">
           <label class="field-label">{$t("settings.download_dir")}</label>
           <div class="dir-row">
-            <input type="text" bind:value={downloadDir} placeholder="Select directory..." disabled />
-            <button class="btn-outline" disabled>{$t("settings.load_existing")}</button>
+            <input type="text" bind:value={downloadDir} disabled={downloadDirLoading} />
+            <button class="btn-outline" onclick={async () => {
+              downloadDirLoading = true;
+              downloadDirMessage = "";
+              try {
+                await setLibraryDir(downloadDir);
+                downloadDirMessage = $t("common.confirm");
+              } catch (err) {
+                downloadDirMessage = `Error: ${err}`;
+              } finally {
+                downloadDirLoading = false;
+              }
+            }} disabled={downloadDirLoading}>{$t("common.confirm")}</button>
+            <button class="btn-outline" onclick={async () => {
+              downloadDirLoading = true;
+              try {
+                await setLibraryDir("");
+                downloadDir = await getLibraryDir();
+              } catch (err) {
+                downloadDirMessage = `Error: ${err}`;
+              } finally {
+                downloadDirLoading = false;
+              }
+            }} disabled={downloadDirLoading}>{$t("settings.reset_default")}</button>
           </div>
+          <p class="hint">{$t("settings.cache_folder_hint")}</p>
+          {#if downloadDirMessage}
+            <p class="message success">{downloadDirMessage}</p>
+          {/if}
         </div>
-
-        <div class="field-row">
-          <label class="field-label">{$t("settings.download_quality")}</label>
-          <div class="btn-group">
-            <button class:active={downloadQuality === "original"} onclick={() => downloadQuality = "original"} disabled>{$t("settings.original")}</button>
-            <button class:active={downloadQuality === "resampled"} onclick={() => downloadQuality = "resampled"} disabled>{$t("settings.resampled")}</button>
-          </div>
-        </div>
-
-        <div class="field-row">
-          <label class="field-label">{$t("settings.resume_downloads")}</label>
-          <label class="toggle">
-            <input type="checkbox" bind:checked={resumeDownloads} disabled />
-            <span class="toggle-slider"></span>
-          </label>
-        </div>
-
-        <p class="hint">{$t("settings.coming_soon")}</p>
       </div>
 
     {:else if activeSection === "about"}
@@ -713,5 +789,32 @@
     margin: 0;
     font-size: 0.85rem;
     color: var(--text-secondary);
+  }
+
+  .cache-usage-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-width: 320px;
+  }
+
+  .cache-usage-bar {
+    width: 100%;
+    height: 6px;
+    background: var(--bg-elevated);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .cache-usage-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 3px;
+    transition: width 0.3s ease;
+  }
+
+  .cache-usage-label {
+    font-size: 0.7rem;
+    color: var(--text-muted);
   }
 </style>

@@ -1,14 +1,17 @@
+pub mod library;
+
 use std::path::PathBuf;
 use std::sync::Mutex;
 
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::models::{
-    FilterParams, FilterPreset, Gallery, GalleryPage, GalleryPageEntry,
-    ReadProgress, ReadingSession, SearchHistoryEntry, SortDirection, SortParams, Tag, TagSuggestion,
+    CloudFavorite, FavoriteFolder, FilterParams, FilterPreset, Gallery, GalleryMetadataPatch,
+    GalleryPage, GalleryPageEntry, LocalPage, ReadProgress, ReadingSession, SearchHistoryEntry,
+    SortDirection, SortParams, Tag, TagSuggestion,
 };
 
-const CURRENT_SCHEMA_VERSION: i32 = 10;
+const CURRENT_SCHEMA_VERSION: i32 = 13;
 
 /// Thread-safe database handle, stored as Tauri managed state.
 pub struct DbState {
@@ -119,8 +122,26 @@ impl DbState {
                 .map_err(|e| e.to_string())?;
         }
 
+        if version < 11 {
+            conn.execute_batch(MIGRATION_V11).map_err(|e| e.to_string())?;
+            conn.execute("UPDATE schema_version SET version = ?1", params![11])
+                .map_err(|e| e.to_string())?;
+        }
+
+        if version < 12 {
+            conn.execute_batch(MIGRATION_V12).map_err(|e| e.to_string())?;
+            conn.execute("UPDATE schema_version SET version = ?1", params![12])
+                .map_err(|e| e.to_string())?;
+        }
+
+        if version < 13 {
+            conn.execute_batch(MIGRATION_V13).map_err(|e| e.to_string())?;
+            conn.execute("UPDATE schema_version SET version = ?1", params![13])
+                .map_err(|e| e.to_string())?;
+        }
+
         assert!(
-            CURRENT_SCHEMA_VERSION == 10,
+            CURRENT_SCHEMA_VERSION == 13,
             "Add new migration branches above when bumping CURRENT_SCHEMA_VERSION"
         );
 
@@ -285,7 +306,7 @@ impl DbState {
         let mut stmt = conn
             .prepare(
                 "SELECT gid, token, title, title_jpn, category, thumb_url, thumb_path,
-                        uploader, posted, rating, file_count, file_size
+                        uploader, posted, rating, file_count, file_size, is_local, description
                  FROM galleries
                  ORDER BY posted DESC
                  LIMIT ?1 OFFSET ?2",
@@ -307,6 +328,10 @@ impl DbState {
                     rating: row.get(9)?,
                     file_count: row.get(10)?,
                     file_size: row.get(11)?,
+                    is_local: row.get(12)?,
+                    description: row.get(13)?,
+                    origin: None,
+                    remote_gid: None,
                     tags: Vec::new(), // filled below
                 })
             })
@@ -349,7 +374,7 @@ impl DbState {
         let placeholders: Vec<String> = gids.iter().enumerate().map(|(i, _)| format!("?{}", i + 1)).collect();
         let sql = format!(
             "SELECT gid, token, title, title_jpn, category, thumb_url, thumb_path,
-                    uploader, posted, rating, file_count, file_size
+                    uploader, posted, rating, file_count, file_size, is_local, description
              FROM galleries WHERE gid IN ({})",
             placeholders.join(", ")
         );
@@ -372,6 +397,10 @@ impl DbState {
                     rating: row.get(9)?,
                     file_count: row.get(10)?,
                     file_size: row.get(11)?,
+                    is_local: row.get(12)?,
+                    description: row.get(13)?,
+                    origin: None,
+                    remote_gid: None,
                     tags: Vec::new(),
                 })
             })
@@ -563,7 +592,7 @@ impl DbState {
         // Data query.
         let data_sql = format!(
             "SELECT g.gid, g.token, g.title, g.title_jpn, g.category, g.thumb_url, g.thumb_path,
-                    g.uploader, g.posted, g.rating, g.file_count, g.file_size
+                    g.uploader, g.posted, g.rating, g.file_count, g.file_size, g.is_local, g.description
              FROM galleries g{joins}{where_sql}
              {order_sql}
              LIMIT ?{limit_idx} OFFSET ?{offset_idx}",
@@ -611,6 +640,10 @@ impl DbState {
                     rating: row.get(9)?,
                     file_count: row.get(10)?,
                     file_size: row.get(11)?,
+                    is_local: row.get(12)?,
+                    description: row.get(13)?,
+                    origin: None,
+                    remote_gid: None,
                     tags: Vec::new(),
                 })
             })
@@ -1025,6 +1058,645 @@ impl DbState {
         Ok(())
     }
 
+    // ── Favorites ────────────────────────────────────────────────────────
+
+    /// Upsert a cloud favorite entry (add or update folder/note for a gallery).
+    pub fn upsert_cloud_favorite(&self, fav: &CloudFavorite) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "INSERT INTO cloud_favorites (gid, token, favcat, favnote, added_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(gid) DO UPDATE SET
+                token=excluded.token, favcat=excluded.favcat,
+                favnote=excluded.favnote, added_at=excluded.added_at",
+            params![fav.gid, fav.token, fav.favcat as i32, fav.favnote, fav.added_at],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Remove a cloud favorite entry.
+    pub fn remove_cloud_favorite(&self, gid: i64) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute("DELETE FROM cloud_favorites WHERE gid = ?1", params![gid])
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Get favorite status for a single gallery. Returns None if not favorited.
+    pub fn get_cloud_favorite(&self, gid: i64) -> Result<Option<CloudFavorite>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.query_row(
+            "SELECT gid, token, favcat, favnote, added_at FROM cloud_favorites WHERE gid = ?1",
+            params![gid],
+            |row| {
+                Ok(CloudFavorite {
+                    gid: row.get(0)?,
+                    token: row.get(1)?,
+                    favcat: row.get::<_, i32>(2)? as u8,
+                    favnote: row.get(3)?,
+                    added_at: row.get(4)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|e| e.to_string())
+    }
+
+    /// List all cloud favorites ordered by added_at DESC.
+    pub fn list_cloud_favorites(&self) -> Result<Vec<CloudFavorite>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT gid, token, favcat, favnote, added_at FROM cloud_favorites ORDER BY added_at DESC",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(CloudFavorite {
+                    gid: row.get(0)?,
+                    token: row.get(1)?,
+                    favcat: row.get::<_, i32>(2)? as u8,
+                    favnote: row.get(3)?,
+                    added_at: row.get(4)?,
+                })
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        Ok(rows)
+    }
+
+    /// Upsert favorite folder info (name + count).
+    pub fn upsert_favorite_folder(&self, folder: &FavoriteFolder) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "INSERT INTO favorite_folders (idx, name, count)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(idx) DO UPDATE SET name=excluded.name, count=excluded.count",
+            params![folder.index as i32, folder.name, folder.count],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Get all favorite folders ordered by index.
+    pub fn get_favorite_folders(&self) -> Result<Vec<FavoriteFolder>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare("SELECT idx, name, count FROM favorite_folders ORDER BY idx ASC")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(FavoriteFolder {
+                    index: row.get::<_, i32>(0)? as u8,
+                    name: row.get(1)?,
+                    count: row.get(2)?,
+                })
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        Ok(rows)
+    }
+
+    // ── Read cache index ──────────────────────────────────────────────────
+
+    /// Upsert a read cache index entry.
+    pub fn read_cache_upsert(&self, cache_key: &str, file_path: &str, size_bytes: i64, last_access: i64) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "INSERT INTO read_cache_index (cache_key, file_path, size_bytes, last_access)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(cache_key) DO UPDATE SET
+                file_path=excluded.file_path, size_bytes=excluded.size_bytes, last_access=excluded.last_access",
+            params![cache_key, file_path, size_bytes, last_access],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Bump the last_access timestamp for a cache entry.
+    pub fn read_cache_touch(&self, cache_key: &str, last_access: i64) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE read_cache_index SET last_access = ?1 WHERE cache_key = ?2",
+            params![last_access, cache_key],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Get total size and count of read cache.
+    /// Returns (total_bytes, file_count).
+    pub fn read_cache_stats(&self) -> Result<(i64, i64), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let (total_bytes, file_count): (i64, i64) = conn
+            .query_row(
+                "SELECT COALESCE(SUM(size_bytes), 0), COUNT(*) FROM read_cache_index",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(|e| e.to_string())?;
+        Ok((total_bytes, file_count))
+    }
+
+    /// Evict the least-recently-used entries until total is under max_bytes.
+    /// Returns list of (cache_key, file_path) pairs that were evicted.
+    pub fn read_cache_evict_lru(&self, max_bytes: i64) -> Result<Vec<(String, String)>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+
+        // Get current total.
+        let total_bytes: i64 = conn
+            .query_row(
+                "SELECT COALESCE(SUM(size_bytes), 0) FROM read_cache_index",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+
+        if total_bytes <= max_bytes {
+            return Ok(Vec::new());
+        }
+
+        // Collect entries ordered by oldest access first until we've identified enough to evict.
+        let mut stmt = conn
+            .prepare("SELECT cache_key, file_path, size_bytes FROM read_cache_index ORDER BY last_access ASC")
+            .map_err(|e| e.to_string())?;
+
+        let rows: Vec<(String, String, i64)> = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?))
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+
+        let mut evicted = Vec::new();
+        let mut running_total = total_bytes;
+        for (key, path, size) in rows {
+            if running_total <= max_bytes {
+                break;
+            }
+            evicted.push((key, path));
+            running_total -= size;
+        }
+
+        // Delete evicted entries from DB.
+        for (key, _) in &evicted {
+            conn.execute("DELETE FROM read_cache_index WHERE cache_key = ?1", params![key])
+                .map_err(|e| e.to_string())?;
+        }
+
+        Ok(evicted)
+    }
+
+    /// Delete all entries from read_cache_index.
+    /// Returns list of file_paths to delete from disk.
+    pub fn read_cache_clear_all(&self) -> Result<Vec<String>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare("SELECT file_path FROM read_cache_index")
+            .map_err(|e| e.to_string())?;
+        let paths: Vec<String> = stmt
+            .query_map([], |row| row.get(0))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        conn.execute("DELETE FROM read_cache_index", [])
+            .map_err(|e| e.to_string())?;
+        Ok(paths)
+    }
+
+    /// Clear read cache index and unlink image_path in gallery_pages for tracked entries.
+    /// Returns (paths_to_delete, bytes_freed).
+    pub fn read_cache_clear_and_unlink(&self) -> Result<(Vec<String>, i64), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare("SELECT cache_key, file_path, size_bytes FROM read_cache_index")
+            .map_err(|e| e.to_string())?;
+        let rows: Vec<(String, String, i64)> = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?))
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        drop(stmt);
+
+        let total_bytes: i64 = rows.iter().map(|(_, _, s)| s).sum();
+        let paths: Vec<String> = rows.iter().map(|(_, p, _)| p.clone()).collect();
+
+        // Unlink image_path in gallery_pages for entries we're evicting.
+        // Cache key format is "{gid}_{page_index}".
+        for (key, _, _) in &rows {
+            if let Some((gid_str, pidx_str)) = key.split_once('_') {
+                if let (Ok(gid), Ok(pidx)) = (gid_str.parse::<i64>(), pidx_str.parse::<i32>()) {
+                    let _ = conn.execute(
+                        "UPDATE gallery_pages SET image_path = NULL WHERE gid = ?1 AND page_index = ?2",
+                        params![gid, pidx],
+                    );
+                }
+            }
+        }
+
+        conn.execute("DELETE FROM read_cache_index", [])
+            .map_err(|e| e.to_string())?;
+
+        Ok((paths, total_bytes))
+    }
+
+    // ── Local gallery CRUD ────────────────────────────────────────────────
+
+    /// Get a gallery by gid. Returns None if not found.
+    pub fn get_gallery_by_gid(&self, gid: i64) -> Result<Option<Gallery>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let result = conn
+            .query_row(
+                "SELECT gid, token, title, title_jpn, category, thumb_url, thumb_path,
+                        uploader, posted, rating, file_count, file_size, is_local, description,
+                        origin, remote_gid
+                 FROM galleries WHERE gid = ?1",
+                params![gid],
+                |row| {
+                    Ok(Gallery {
+                        gid: row.get(0)?,
+                        token: row.get(1)?,
+                        title: row.get(2)?,
+                        title_jpn: row.get(3)?,
+                        category: row.get(4)?,
+                        thumb_url: row.get(5)?,
+                        thumb_path: row.get(6)?,
+                        uploader: row.get(7)?,
+                        posted: row.get(8)?,
+                        rating: row.get(9)?,
+                        file_count: row.get(10)?,
+                        file_size: row.get(11)?,
+                        is_local: row.get(12)?,
+                        description: row.get(13)?,
+                        origin: row.get(14)?,
+                        remote_gid: row.get(15)?,
+                        tags: Vec::new(),
+                    })
+                },
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+
+        if let Some(mut g) = result {
+            let mut tag_stmt = conn
+                .prepare("SELECT namespace, name FROM gallery_tags WHERE gid = ?1")
+                .map_err(|e| e.to_string())?;
+            let tags: Vec<Tag> = tag_stmt
+                .query_map(params![gid], |row| {
+                    Ok(Tag { namespace: row.get(0)?, name: row.get(1)? })
+                })
+                .map_err(|e| e.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?;
+            g.tags = tags;
+            Ok(Some(g))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Mark a gallery as local (or non-local).
+    pub fn set_gallery_is_local(&self, gid: i64, is_local: bool, local_folder: Option<&str>) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE galleries SET is_local = ?1, local_folder = ?2 WHERE gid = ?3",
+            params![is_local as i32, local_folder, gid],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Get a page of local galleries (is_local=1) ordered by posted DESC.
+    pub fn get_local_galleries(&self, offset: i64, limit: i64) -> Result<GalleryPage, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+
+        let total_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM galleries WHERE is_local = 1", [], |row| row.get(0))
+            .map_err(|e| e.to_string())?;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT gid, token, title, title_jpn, category, thumb_url, thumb_path,
+                        uploader, posted, rating, file_count, file_size, is_local, description,
+                        origin, remote_gid
+                 FROM galleries WHERE is_local = 1
+                 ORDER BY posted DESC
+                 LIMIT ?1 OFFSET ?2",
+            )
+            .map_err(|e| e.to_string())?;
+
+        let gallery_rows: Vec<Gallery> = stmt
+            .query_map(params![limit, offset], |row| {
+                Ok(Gallery {
+                    gid: row.get(0)?,
+                    token: row.get(1)?,
+                    title: row.get(2)?,
+                    title_jpn: row.get(3)?,
+                    category: row.get(4)?,
+                    thumb_url: row.get(5)?,
+                    thumb_path: row.get(6)?,
+                    uploader: row.get(7)?,
+                    posted: row.get(8)?,
+                    rating: row.get(9)?,
+                    file_count: row.get(10)?,
+                    file_size: row.get(11)?,
+                    is_local: row.get(12)?,
+                    description: row.get(13)?,
+                    origin: row.get(14)?,
+                    remote_gid: row.get(15)?,
+                    tags: Vec::new(),
+                })
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+
+        // Load tags (gallery_tags UNION local_tags) for each gallery.
+        let mut tag_stmt = conn
+            .prepare(
+                "SELECT namespace, name FROM gallery_tags WHERE gid = ?1
+                 UNION SELECT namespace, name FROM local_tags WHERE gid = ?1",
+            )
+            .map_err(|e| e.to_string())?;
+
+        let mut galleries = gallery_rows;
+        for gallery in &mut galleries {
+            let tags: Vec<Tag> = tag_stmt
+                .query_map(params![gallery.gid], |row| {
+                    Ok(Tag { namespace: row.get(0)?, name: row.get(1)? })
+                })
+                .map_err(|e| e.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?;
+            gallery.tags = tags;
+        }
+
+        Ok(GalleryPage { galleries, total_count })
+    }
+
+    /// Get all local pages for a gallery from local_gallery_pages.
+    pub fn get_local_gallery_pages(&self, gid: i64) -> Result<Vec<LocalPage>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT gid, page_index, file_path, source_url, width, height
+                 FROM local_gallery_pages WHERE gid = ?1 ORDER BY page_index",
+            )
+            .map_err(|e| e.to_string())?;
+        let pages = stmt
+            .query_map(params![gid], |row| {
+                Ok(LocalPage {
+                    gid: row.get(0)?,
+                    page_index: row.get(1)?,
+                    file_path: row.get(2)?,
+                    source_url: row.get(3)?,
+                    width: row.get(4)?,
+                    height: row.get(5)?,
+                })
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        Ok(pages)
+    }
+
+    /// Update gallery metadata fields. Only Some fields are updated.
+    pub fn update_gallery_metadata(&self, gid: i64, patch: &GalleryMetadataPatch) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+
+        if let Some(ref title) = patch.title {
+            conn.execute("UPDATE galleries SET title = ?1 WHERE gid = ?2", params![title, gid])
+                .map_err(|e| e.to_string())?;
+        }
+        if let Some(ref title_jpn) = patch.title_jpn {
+            conn.execute("UPDATE galleries SET title_jpn = ?1 WHERE gid = ?2", params![title_jpn, gid])
+                .map_err(|e| e.to_string())?;
+        }
+        if let Some(ref category) = patch.category {
+            conn.execute("UPDATE galleries SET category = ?1 WHERE gid = ?2", params![category, gid])
+                .map_err(|e| e.to_string())?;
+        }
+        if let Some(ref uploader) = patch.uploader {
+            conn.execute("UPDATE galleries SET uploader = ?1 WHERE gid = ?2", params![uploader, gid])
+                .map_err(|e| e.to_string())?;
+        }
+        if let Some(ref description) = patch.description {
+            conn.execute("UPDATE galleries SET description = ?1 WHERE gid = ?2", params![description, gid])
+                .map_err(|e| e.to_string())?;
+        }
+
+        // Tags: add new ones to local_tags, remove specified ones.
+        if let Some(ref tags_add) = patch.tags_add {
+            let mut stmt = conn
+                .prepare(
+                    "INSERT OR IGNORE INTO local_tags (gid, namespace, name) VALUES (?1, ?2, ?3)",
+                )
+                .map_err(|e| e.to_string())?;
+            for tag in tags_add {
+                stmt.execute(params![gid, tag.namespace, tag.name])
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        if let Some(ref tags_remove) = patch.tags_remove {
+            for tag in tags_remove {
+                conn.execute(
+                    "DELETE FROM local_tags WHERE gid = ?1 AND namespace = ?2 AND name = ?3",
+                    params![gid, tag.namespace, tag.name],
+                )
+                .map_err(|e| e.to_string())?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Reorder local pages to match new_order (list of current page_index values in new order).
+    pub fn reorder_local_pages(&self, gid: i64, new_order: &[i32]) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+
+        // Load existing pages indexed by old page_index.
+        let mut stmt = conn
+            .prepare(
+                "SELECT page_index, file_path, source_url, width, height
+                 FROM local_gallery_pages WHERE gid = ?1 ORDER BY page_index",
+            )
+            .map_err(|e| e.to_string())?;
+        let existing: Vec<(i32, String, Option<String>, Option<i32>, Option<i32>)> = stmt
+            .query_map(params![gid], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        drop(stmt);
+
+        // Build a map from old page_index -> row data.
+        use std::collections::HashMap;
+        let by_idx: HashMap<i32, (String, Option<String>, Option<i32>, Option<i32>)> = existing
+            .into_iter()
+            .map(|(idx, fp, su, w, h)| (idx, (fp, su, w, h)))
+            .collect();
+
+        // Delete all and re-insert in new order.
+        conn.execute("DELETE FROM local_gallery_pages WHERE gid = ?1", params![gid])
+            .map_err(|e| e.to_string())?;
+
+        let mut insert_stmt = conn
+            .prepare(
+                "INSERT INTO local_gallery_pages (gid, page_index, file_path, source_url, width, height)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )
+            .map_err(|e| e.to_string())?;
+
+        for (new_idx, &old_idx) in new_order.iter().enumerate() {
+            if let Some((fp, su, w, h)) = by_idx.get(&old_idx) {
+                insert_stmt
+                    .execute(params![gid, new_idx as i32, fp, su, w, h])
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Insert new local pages into local_gallery_pages after insert_after_index.
+    /// Pages after insert_after_index are renumbered to make room.
+    /// Each tuple: (file_path, source_url, width, height).
+    /// Returns the inserted LocalPage rows.
+    pub fn insert_local_pages(
+        &self,
+        gid: i64,
+        pages: &[(String, Option<String>, Option<i32>, Option<i32>)],
+        insert_after_index: i32,
+    ) -> Result<Vec<LocalPage>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+
+        // Shift existing pages that come after insert point.
+        let shift_count = pages.len() as i32;
+        conn.execute(
+            "UPDATE local_gallery_pages SET page_index = page_index + ?1
+             WHERE gid = ?2 AND page_index > ?3",
+            params![shift_count, gid, insert_after_index],
+        )
+        .map_err(|e| e.to_string())?;
+
+        let mut result = Vec::with_capacity(pages.len());
+        let mut stmt = conn
+            .prepare(
+                "INSERT INTO local_gallery_pages (gid, page_index, file_path, source_url, width, height)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )
+            .map_err(|e| e.to_string())?;
+
+        for (i, (fp, su, w, h)) in pages.iter().enumerate() {
+            let new_idx = insert_after_index + 1 + i as i32;
+            stmt.execute(params![gid, new_idx, fp, su, w, h])
+                .map_err(|e| e.to_string())?;
+            result.push(LocalPage {
+                gid,
+                page_index: new_idx,
+                file_path: fp.clone(),
+                source_url: su.clone(),
+                width: *w,
+                height: *h,
+            });
+        }
+
+        Ok(result)
+    }
+
+    /// Remove a local page. Optionally delete the file on disk.
+    /// Renumbers remaining pages to fill the gap.
+    pub fn remove_local_page(&self, gid: i64, page_index: i32) -> Result<Option<String>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+
+        // Get the file path before deleting.
+        let file_path: Option<String> = conn
+            .query_row(
+                "SELECT file_path FROM local_gallery_pages WHERE gid = ?1 AND page_index = ?2",
+                params![gid, page_index],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+
+        conn.execute(
+            "DELETE FROM local_gallery_pages WHERE gid = ?1 AND page_index = ?2",
+            params![gid, page_index],
+        )
+        .map_err(|e| e.to_string())?;
+
+        // Renumber pages after the deleted one.
+        conn.execute(
+            "UPDATE local_gallery_pages SET page_index = page_index - 1
+             WHERE gid = ?1 AND page_index > ?2",
+            params![gid, page_index],
+        )
+        .map_err(|e| e.to_string())?;
+
+        Ok(file_path)
+    }
+
+    /// Upsert a local gallery (insert or update), setting is_local=1.
+    /// Uses the gallery's gid as primary key. Also upserts local_tags.
+    pub fn upsert_local_gallery(&self, gallery: &Gallery, local_folder: &str, description: Option<&str>) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        conn.execute(
+            "INSERT INTO galleries (gid, token, title, title_jpn, category, thumb_url, thumb_path,
+                                    uploader, posted, rating, file_count, file_size,
+                                    metadata_source, updated_at, is_local, local_folder, description,
+                                    origin, remote_gid)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'local', ?13, 1, ?14, ?15, ?16, ?17)
+             ON CONFLICT(gid) DO UPDATE SET
+                token=excluded.token, title=excluded.title, title_jpn=excluded.title_jpn,
+                category=excluded.category, thumb_url=excluded.thumb_url,
+                thumb_path=COALESCE(excluded.thumb_path, galleries.thumb_path),
+                uploader=COALESCE(excluded.uploader, galleries.uploader),
+                posted=excluded.posted, rating=excluded.rating,
+                file_count=excluded.file_count,
+                file_size=COALESCE(excluded.file_size, galleries.file_size),
+                metadata_source='local', updated_at=excluded.updated_at,
+                is_local=1, local_folder=excluded.local_folder,
+                description=COALESCE(excluded.description, galleries.description),
+                origin=COALESCE(excluded.origin, galleries.origin),
+                remote_gid=COALESCE(excluded.remote_gid, galleries.remote_gid)",
+            params![
+                gallery.gid, gallery.token, gallery.title, gallery.title_jpn,
+                gallery.category, gallery.thumb_url, gallery.thumb_path,
+                gallery.uploader, gallery.posted, gallery.rating,
+                gallery.file_count, gallery.file_size,
+                now, local_folder, description,
+                gallery.origin, gallery.remote_gid,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+
+        // Replace local_tags.
+        conn.execute("DELETE FROM local_tags WHERE gid = ?1", params![gallery.gid])
+            .map_err(|e| e.to_string())?;
+
+        let mut stmt = conn
+            .prepare("INSERT OR IGNORE INTO local_tags (gid, namespace, name) VALUES (?1, ?2, ?3)")
+            .map_err(|e| e.to_string())?;
+        for tag in &gallery.tags {
+            stmt.execute(params![gallery.gid, tag.namespace, tag.name])
+                .map_err(|e| e.to_string())?;
+        }
+
+        Ok(())
+    }
+
     /// Autocomplete tag suggestions matching the given prefix/substring.
     /// Queries the gallery_tags table with LIKE matching on name and namespace:name.
     /// Returns up to `limit` distinct (namespace, name) pairs ordered by name.
@@ -1175,4 +1847,61 @@ CREATE TABLE search_history (
     searched_at INTEGER NOT NULL
 );
 CREATE INDEX idx_search_history_searched_at ON search_history(searched_at DESC);
+";
+
+const MIGRATION_V11: &str = "
+CREATE TABLE cloud_favorites (
+    gid         INTEGER PRIMARY KEY REFERENCES galleries(gid) ON DELETE CASCADE,
+    token       TEXT    NOT NULL,
+    favcat      INTEGER NOT NULL DEFAULT 0,
+    favnote     TEXT    NOT NULL DEFAULT '',
+    added_at    INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX idx_cloud_favorites_favcat ON cloud_favorites(favcat);
+CREATE INDEX idx_cloud_favorites_added ON cloud_favorites(added_at DESC);
+
+CREATE TABLE favorite_folders (
+    idx     INTEGER PRIMARY KEY,
+    name    TEXT    NOT NULL,
+    count   INTEGER NOT NULL DEFAULT 0
+);
+";
+
+const MIGRATION_V12: &str = "
+CREATE TABLE read_cache_index (
+    cache_key   TEXT    PRIMARY KEY,
+    file_path   TEXT    NOT NULL,
+    size_bytes  INTEGER NOT NULL DEFAULT 0,
+    last_access INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX idx_read_cache_last_access ON read_cache_index(last_access);
+
+ALTER TABLE galleries ADD COLUMN description TEXT;
+ALTER TABLE galleries ADD COLUMN is_local INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE galleries ADD COLUMN local_folder TEXT;
+
+CREATE TABLE local_gallery_pages (
+    gid         INTEGER NOT NULL REFERENCES galleries(gid) ON DELETE CASCADE,
+    page_index  INTEGER NOT NULL,
+    file_path   TEXT    NOT NULL,
+    source_url  TEXT,
+    width       INTEGER,
+    height      INTEGER,
+    PRIMARY KEY (gid, page_index)
+);
+
+CREATE TABLE local_tags (
+    gid         INTEGER NOT NULL REFERENCES galleries(gid) ON DELETE CASCADE,
+    namespace   TEXT    NOT NULL DEFAULT '',
+    name        TEXT    NOT NULL,
+    PRIMARY KEY (gid, namespace, name)
+);
+
+CREATE INDEX idx_galleries_is_local ON galleries(is_local);
+";
+
+const MIGRATION_V13: &str = "
+ALTER TABLE galleries ADD COLUMN origin TEXT;
+ALTER TABLE galleries ADD COLUMN remote_gid INTEGER;
+CREATE INDEX idx_galleries_origin ON galleries(origin);
 ";

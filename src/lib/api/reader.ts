@@ -126,30 +126,31 @@ export async function getGalleryImage(
 
 // ── Read progress ─────────────────────────────────────────────────────────
 
-export async function updateReadProgress(progress: ReadProgress): Promise<void> {
-  return invoke("update_read_progress", { progress });
+export async function updateReadProgress(progress: ReadProgress, isLocal = false): Promise<void> {
+  return invoke("update_read_progress", { progress, isLocal });
 }
 
-export async function getReadProgress(gid: number): Promise<ReadProgress | null> {
-  return invoke("get_read_progress", { gid });
+export async function getReadProgress(gid: number, isLocal = false): Promise<ReadProgress | null> {
+  return invoke("get_read_progress", { gid, isLocal });
 }
 
-export async function getReadProgressBatch(gids: number[]): Promise<ReadProgress[]> {
-  return invoke("get_read_progress_batch", { gids });
+export async function getReadProgressBatch(gids: number[], isLocal = false): Promise<ReadProgress[]> {
+  return invoke("get_read_progress_batch", { gids, isLocal });
 }
 
 // ── Reading sessions ──────────────────────────────────────────────────────
 
-export async function startReadingSession(gid: number, openedAt: number): Promise<number> {
-  return invoke("start_reading_session", { gid, openedAt });
+export async function startReadingSession(gid: number, openedAt: number, isLocal = false): Promise<number> {
+  return invoke("start_reading_session", { gid, openedAt, isLocal });
 }
 
 export async function endReadingSession(
   sessionId: number,
   closedAt: number,
-  pagesRead: number
+  pagesRead: number,
+  isLocal = false
 ): Promise<void> {
-  return invoke("end_reading_session", { sessionId, closedAt, pagesRead });
+  return invoke("end_reading_session", { sessionId, closedAt, pagesRead, isLocal });
 }
 
 export async function getReadingHistory(

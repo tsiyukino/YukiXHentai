@@ -203,5 +203,9 @@ fn metadata_to_gallery(meta: GalleryMetadata) -> Gallery {
         file_count,
         file_size: Some(meta.filesize),
         tags,
+        is_local: None,
+        description: None,
+        origin: None,
+        remote_gid: None,
     }
 }

@@ -589,3 +589,106 @@ pub async fn download_thumbnail(
         .map(|b| b.to_vec())
         .map_err(|e| format!("Failed to read thumbnail bytes: {}", e))
 }
+
+// ── Favorites ─────────────────────────────────────────────────────────────
+
+/// Fetch the favorites page. Returns parsed listing + folder metadata.
+/// `url` is either the base favorites URL or a cursor-based next URL.
+pub async fn fetch_favorites_page(
+    client: &Client,
+    rate_limiter: &RateLimiter,
+    url: &str,
+) -> Result<(ListingPage, Vec<crate::models::FavoriteFolder>), String> {
+    rate_limiter.wait().await;
+
+    tracing::info!("[fetch_favorites_page] requesting URL: {}", url);
+
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        rate_limiter.report_failure().await;
+        return Err(format!("Server returned status {}", status));
+    }
+
+    let body = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read response body: {}", e))?;
+
+    match (parser::parse_gallery_listing(&body), parser::parse_favorite_folders(&body)) {
+        (Ok(listing), folders) => {
+            rate_limiter.report_success().await;
+            Ok((listing, folders.unwrap_or_default()))
+        }
+        (Err(e), _) => {
+            rate_limiter.report_failure().await;
+            Err(e)
+        }
+    }
+}
+
+/// Submit an add/move/remove favorite action.
+/// `favcat`: Some(0–9) = add/move to folder; None = remove.
+/// `favnote`: personal note (empty string is fine).
+pub async fn submit_favorite(
+    client: &Client,
+    rate_limiter: &RateLimiter,
+    gid: i64,
+    token: &str,
+    favcat: Option<u8>,
+    favnote: &str,
+) -> Result<(), String> {
+    rate_limiter.wait().await;
+
+    let url = format!(
+        "{}/gallerypopups.php?gid={}&t={}&act=addfav",
+        EXH_BASE, gid, token
+    );
+
+    let favcat_str = match favcat {
+        Some(idx) => idx.to_string(),
+        None => "favdel".to_string(),
+    };
+    let note = if favcat.is_none() { "" } else { favnote };
+
+    tracing::info!(
+        "[submit_favorite] gid={} token={} favcat={} note_len={}",
+        gid, token, favcat_str, note.len()
+    );
+
+    let params = [
+        ("favcat", favcat_str.as_str()),
+        ("favnote", note),
+        ("apply", "Apply Changes"),
+        ("update", "1"),
+    ];
+
+    let response = client
+        .post(&url)
+        .form(&params)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        rate_limiter.report_failure().await;
+        return Err(format!("Server returned status {}", status));
+    }
+
+    rate_limiter.report_success().await;
+    Ok(())
+}
+
+/// Build the base favorites page URL for a given folder (or all).
+pub fn build_favorites_url(favcat: Option<u8>) -> String {
+    match favcat {
+        Some(idx) => format!("{}/favorites.php?favcat={}", EXH_BASE, idx),
+        None => format!("{}/favorites.php", EXH_BASE),
+    }
+}

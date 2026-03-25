@@ -1,18 +1,22 @@
 <script lang="ts">
   import { t } from "$lib/i18n";
   import Slider from "./Slider.svelte";
+  import FavoriteDialog from "./FavoriteDialog.svelte";
+  import LocalMetadataEditor from "./LocalMetadataEditor.svelte";
 
   // When true, renders as a full-page inline element (no fixed overlay, no animation).
   // When false (default), renders as fixed side-panel overlay.
   let { fullPage = false }: { fullPage?: boolean } = $props();
   import { convertFileSrc } from "@tauri-apps/api/core";
-  import { detailGallery, detailPageThumbs, detailBatchState } from "$lib/stores/detail";
+  import { detailGallery, detailPageThumbs, detailBatchState, detailOpenedAsLocal } from "$lib/stores/detail";
   import { readerGallery, readerPage, readerSessionId, readerSourceGallery } from "$lib/stores/reader";
-  import { detailExpanded, detailPreviewSize } from "$lib/stores/ui";
+  import { detailExpanded, detailPreviewSize, libraryRefreshTick } from "$lib/stores/ui";
   import { thumbSrc } from "$lib/utils/thumb";
   import { categoryColor } from "$lib/utils/category";
   import { onDestroy } from "svelte";
   import { get } from "svelte/store";
+  import { getFavoriteStatus, folderColor } from "$lib/api/favorites";
+  import { submitDownloadQueue, getLocalGalleryPages, deleteLocalGallery, syncLocalGallery } from "$lib/api/library";
   import {
     getReadProgress,
     startReadingSession,
@@ -29,6 +33,9 @@
   let gallery = $state<Gallery | null>(null);
   let loading = $state(false);
   let loadingMetadata = $state(false);
+  // Snapshot of detailOpenedAsLocal at the moment the gallery opened.
+  // Determines whether to go fully offline (no network calls).
+  let openedAsLocal = $state(false);
 
   // Page entries indexed by page_index. Sparse — only populated for fetched batches.
   let pageEntries = $state<Record<number, GalleryPageEntry>>({});
@@ -66,6 +73,10 @@
   // Track whether component is still alive (not destroyed).
   let alive = true;
 
+  // Download to local library state.
+  let downloading = $state(false);
+  let downloadMessage = $state("");
+
   onDestroy(() => {
     alive = false;
     setThumbReadyCallback(null);
@@ -97,6 +108,11 @@
     imgLoaded = false;
     loadingMetadata = false;
     showkey = null;
+    favcat = null;
+    favnote = "";
+    showFavDialog = false;
+    downloading = false;
+    downloadMessage = "";
 
     // Detect same-gallery re-open (e.g. returning from the reader).
     // We use detailBatchState.gid instead of currentGid because currentGid gets
@@ -133,6 +149,11 @@
     if (g) {
       gallery = g;
       currentGid = g.gid;
+      // Always re-capture openedAsLocal when any gallery opens (including same-gallery
+      // re-opens from reader) so a page switch (home → library) always reflects the
+      // correct context. get() avoids making detailOpenedAsLocal a reactive dependency
+      // of this effect (which would cause spurious re-runs).
+      openedAsLocal = get(detailOpenedAsLocal);
       // Reset service queue for this gallery and register our write-back callback.
       resetPageThumbs(g.gid);
       setThumbReadyCallback((pageIdx, rawPath) => {
@@ -169,10 +190,17 @@
           pageEntries,          // the freshly-reset Record
         });
       }
-      // Fetch metadata (fast JSON API).
-      loadMetadata(g.gid, g.token);
-      // Fetch first batch of pages (p=0) — fetchBatch is a no-op if already fetched.
-      fetchBatch(g.gid, g.token, 0);
+      if (openedAsLocal) {
+        // Opened from local library: fully offline. Load pages from DB only.
+        loadLocalPages(g.gid);
+      } else {
+        // Opened from home/search/favorites: fetch metadata and pages from ExHentai.
+        loadMetadata(g.gid, g.token);
+        // Fetch first batch of pages (p=0) — fetchBatch is a no-op if already fetched.
+        fetchBatch(g.gid, g.token, 0);
+      }
+      // Load favorite status from local DB (fast, no network).
+      loadFavoriteStatus(g.gid);
     } else {
       gallery = null;
       currentGid = null;
@@ -224,6 +252,83 @@
         loadingMetadata = false;
       }
     }
+  }
+
+  async function loadFavoriteStatus(gid: number) {
+    try {
+      const status = await getFavoriteStatus(gid);
+      if (currentGid === gid) {
+        favcat = status.favcat;
+        favnote = status.favnote;
+      }
+    } catch {
+      // Non-critical — ignore
+    }
+  }
+
+  /** Load pages for a local gallery from DB and populate thumbnails from local file paths. */
+  async function loadLocalPages(gid: number) {
+    try {
+      const localPages = await getLocalGalleryPages(gid);
+      if (!alive || currentGid !== gid) return;
+      totalPageCount = localPages.length;
+      // Populate pageEntries with local image paths as thumb — no network needed.
+      for (const p of localPages) {
+        pageEntries[p.page_index] = {
+          page_index: p.page_index,
+          page_url: "",
+          image_path: p.file_path,
+          thumb_url: null,
+          imgkey: null,
+        };
+        // Use local file path directly as the page thumbnail.
+        pageThumbPaths[p.page_index] = p.file_path;
+      }
+      // Update shared batch state so reader can use the page data.
+      const bs = get(detailBatchState);
+      if (bs && bs.gid === gid) {
+        detailBatchState.set({ ...bs, totalPageCount: localPages.length });
+      }
+    } catch (err) {
+      console.error("Failed to load local pages:", err);
+    }
+  }
+
+  function handleFavoriteClick() {
+    showFavDialog = true;
+  }
+
+  async function handleDownload() {
+    if (!gallery || downloading) return;
+    downloading = true;
+    downloadMessage = "";
+    try {
+      const result = await submitDownloadQueue(
+        [{ gid: gallery.gid, token: gallery.token }],
+        true,
+        undefined,
+      );
+      if (result.skippedAlreadyLocal > 0) {
+        downloadMessage = $t("detail.download_already_local");
+      } else {
+        downloadMessage = $t("detail.download_queued");
+      }
+    } catch (err) {
+      downloadMessage = String(err);
+    } finally {
+      downloading = false;
+      // Clear message after 3 seconds.
+      setTimeout(() => { downloadMessage = ""; }, 3000);
+    }
+  }
+
+  function handleFavDialogClose() {
+    showFavDialog = false;
+  }
+
+  function handleFavUpdated(newFavcat: number | null, newNote: string) {
+    favcat = newFavcat;
+    favnote = newNote;
   }
 
   async function fetchBatch(gid: number, token: string, detailPage: number) {
@@ -353,8 +458,23 @@
     enqueuePageThumb(currentGid, pageIdx, entry.thumb_url);
   }
 
+  // Favorite state
+  let favcat = $state<number | null>(null);
+  let favnote = $state("");
+  let showFavDialog = $state(false);
+
+  // Local metadata editor
+  let showMetadataEditor = $state(false);
+
   let imgLoaded = $state(false);
-  let imgSrc = $derived(gallery ? thumbSrc(gallery.thumb_path, gallery.thumb_url) : "");
+  let imgSrc = $derived(
+    !gallery ? "" :
+    (openedAsLocal && !gallery.thumb_path)
+      ? (pageEntries[0]?.image_path ? convertFileSrc(pageEntries[0].image_path)
+          : pageThumbPaths[0] ? convertFileSrc(pageThumbPaths[0])
+          : thumbSrc(gallery.thumb_path, gallery.thumb_url))
+      : thumbSrc(gallery.thumb_path, gallery.thumb_url)
+  );
   let catColor = $derived(gallery ? categoryColor(gallery.category) : "#9e9e9e");
   let langTag = $derived(gallery?.tags.find(t => t.namespace === "language")?.name ?? null);
   let date = $derived(
@@ -391,8 +511,7 @@
   }
 
   function handleCollapse() {
-    expanded = false;
-    $detailExpanded = false;
+    $detailGallery = null;
   }
 
   function handlePreviewSizeChange(val: number) {
@@ -434,6 +553,26 @@
     };
   }
 
+  async function buildLocalReaderPages() {
+    if (!gallery) return null;
+    const localPages = await getLocalGalleryPages(gallery.gid);
+    const dense: GalleryPageEntry[] = localPages.map((p) => ({
+      page_index: p.page_index,
+      page_url: "",
+      image_path: p.file_path,
+      thumb_url: null,
+      imgkey: null,
+    }));
+    return {
+      gid: gallery.gid,
+      token: gallery.token,
+      title: gallery.title,
+      pages: dense,
+      total_pages: dense.length,
+      showkey: null,
+    };
+  }
+
   async function handleRead() {
     if (!gallery || loading) return;
     loading = true;
@@ -443,7 +582,9 @@
       if (progress && !progress.is_completed) {
         startPage = progress.last_page_read;
       }
-      const pages = buildReaderPages(startPage);
+      const pages = openedAsLocal
+        ? await buildLocalReaderPages()
+        : buildReaderPages(startPage);
       if (!pages) return;
       const now = Math.floor(Date.now() / 1000);
       const sessionId = await startReadingSession(gallery.gid, now);
@@ -463,7 +604,9 @@
     if (!gallery || loading) return;
     loading = true;
     try {
-      const pages = buildReaderPages(pageIdx);
+      const pages = openedAsLocal
+        ? await buildLocalReaderPages()
+        : buildReaderPages(pageIdx);
       if (!pages) return;
       const now = Math.floor(Date.now() / 1000);
       const sessionId = await startReadingSession(gallery.gid, now);
@@ -479,6 +622,42 @@
     }
   }
 
+  async function handleDeleteLocal() {
+    if (!gallery) return;
+    const confirmed = confirm($t("detail.delete_local_confirm"));
+    if (!confirmed) return;
+    downloading = true;
+    downloadMessage = "";
+    try {
+      await deleteLocalGallery(gallery.gid);
+      // Signal library page to refresh before closing.
+      $libraryRefreshTick += 1;
+      $detailGallery = null;
+    } catch (err) {
+      downloadMessage = String(err);
+      downloading = false;
+    }
+  }
+
+  async function handleSync() {
+    if (!gallery || downloading) return;
+    if (!gallery.origin || !gallery.remote_gid) {
+      alert($t("detail.sync_local_no_origin"));
+      return;
+    }
+    downloading = true;
+    downloadMessage = "";
+    try {
+      await syncLocalGallery(gallery.gid);
+      downloadMessage = $t("detail.sync_local");
+    } catch (err) {
+      downloadMessage = String(err);
+    } finally {
+      downloading = false;
+      setTimeout(() => { downloadMessage = ""; }, 3000);
+    }
+  }
+
   function pageThumbSrc(pageIdx: number): string | null {
     const localPath = pageThumbPaths[pageIdx];
     if (localPath) return convertFileSrc(localPath);
@@ -486,7 +665,7 @@
   }
 
   function handleKeydown(e: KeyboardEvent) {
-    if (e.key === "Escape" && gallery) {
+    if (e.key === "Escape" && gallery && !showMetadataEditor) {
       if (fullPage) {
         handleCollapse();
       } else {
@@ -497,6 +676,24 @@
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
+
+{#if showFavDialog && gallery}
+  <FavoriteDialog
+    gid={gallery.gid}
+    token={gallery.token}
+    currentFavcat={favcat}
+    currentNote={favnote}
+    onClose={handleFavDialogClose}
+    onUpdated={handleFavUpdated}
+  />
+{/if}
+
+{#if showMetadataEditor && gallery}
+  <LocalMetadataEditor
+    gallery={gallery}
+    onClose={() => { showMetadataEditor = false; }}
+  />
+{/if}
 
 {#if gallery}
   {#if !fullPage}
@@ -600,12 +797,32 @@
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/><path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/></svg>
           {$t("detail.read")}
         </button>
-        <button class="action-btn" disabled>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-          {$t("detail.download")}
-        </button>
-        <button class="action-btn" disabled>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
+        {#if openedAsLocal}
+          <button
+            class="action-btn danger"
+            onclick={handleDeleteLocal}
+            disabled={downloading}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>
+            {downloading ? $t("common.loading") : $t("detail.delete_local")}
+          </button>
+        {:else}
+          <button
+            class="action-btn"
+            onclick={handleDownload}
+            disabled={downloading}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            {downloading ? $t("common.loading") : $t("detail.download")}
+          </button>
+        {/if}
+        <button
+          class="action-btn"
+          class:favorited={favcat !== null}
+          onclick={handleFavoriteClick}
+          style={favcat !== null ? `--fav-color: ${folderColor(favcat)}` : ""}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill={favcat !== null ? "var(--fav-color, currentColor)" : "none"} stroke={favcat !== null ? "var(--fav-color, currentColor)" : "currentColor"} stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
           {$t("detail.favorite")}
         </button>
         <button class="action-btn" disabled>
@@ -616,7 +833,22 @@
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
           {$t("detail.search_similar")}
         </button>
+        {#if openedAsLocal}
+          <button class="action-btn" onclick={() => showMetadataEditor = true}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+            {$t("local.edit_metadata")}
+          </button>
+          {#if gallery.origin && gallery.remote_gid}
+            <button class="action-btn" onclick={handleSync} disabled={downloading}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+              {$t("detail.sync_local")}
+            </button>
+          {/if}
+        {/if}
       </div>
+      {#if downloadMessage}
+        <p class="download-msg">{downloadMessage}</p>
+      {/if}
 
       <!-- Tags section -->
       {#if tagGroups().length > 0}
@@ -980,6 +1212,34 @@
 
   .action-btn.primary:hover:not(:disabled) {
     background: var(--accent-hover);
+  }
+
+  .action-btn.favorited {
+    color: var(--fav-color, var(--accent));
+    border-color: var(--fav-color, var(--border-strong));
+  }
+
+  .action-btn.active-dl {
+    color: var(--green);
+    border-color: var(--green);
+    opacity: 0.7;
+  }
+
+  .action-btn.danger {
+    color: var(--red, #e05252);
+    border-color: var(--red, #e05252);
+  }
+
+  .action-btn.danger:hover:not(:disabled) {
+    background: var(--red, #e05252);
+    color: #fff;
+  }
+
+  .download-msg {
+    margin: 4px 0 0;
+    font-size: 0.72rem;
+    color: var(--green);
+    padding: 0 2px;
   }
 
   .tags-section h3 {

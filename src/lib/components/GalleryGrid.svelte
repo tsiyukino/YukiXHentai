@@ -15,7 +15,7 @@
     emptySortFetchProgress,
   } from "$lib/stores/galleries";
   import type { HomeFilterState, SortField } from "$lib/stores/galleries";
-  import { detailGallery } from "$lib/stores/detail";
+  import { detailGallery, detailOpenedAsLocal } from "$lib/stores/detail";
   import { viewMode, cardSize } from "$lib/stores/ui";
   import GalleryCard from "./GalleryCard.svelte";
   import GalleryListItem from "./GalleryListItem.svelte";
@@ -489,6 +489,7 @@
   }
 
   function handleOpenGallery(gallery: Gallery) {
+    $detailOpenedAsLocal = false;
     $detailGallery = gallery;
   }
 
@@ -540,6 +541,10 @@
   let pendingThumbGids = new Set<number>();
   let requestedThumbGids = new Set<number>();
 
+  // How long to wait before allowing a retry for a gid whose backend download
+  // never produced a thumbnail-ready event (timeout / transient failure).
+  const THUMB_RETRY_AFTER_MS = 20_000;
+
   function handleVisibleRangeChanged(startIdx: number, endIdx: number) {
     // Collect gids of visible galleries that need thumbnails.
     const source = $sortActive
@@ -568,9 +573,23 @@
       for (const gid of gids) requestedThumbGids.add(gid);
       downloadThumbnailsForGids(gids).catch((err) => {
         console.error("[GalleryGrid] thumbnail download error:", err);
-        // On error, allow retry by removing from requested set.
+        // On IPC error, allow immediate retry.
         for (const gid of gids) requestedThumbGids.delete(gid);
       });
+      // Schedule a retry window: after THUMB_RETRY_AFTER_MS, remove any gids
+      // from requestedThumbGids that still have no thumb_path (backend timed
+      // out or failed silently). The next scroll event will re-request them.
+      setTimeout(() => {
+        const allGalleries = get(galleries);
+        const galleryMap = new Map(allGalleries.map(g => [g.gid, g]));
+        for (const gid of gids) {
+          const g = galleryMap.get(gid);
+          if (!g || !g.thumb_path) {
+            requestedThumbGids.delete(gid);
+          }
+        }
+        recheckTrigger++;
+      }, THUMB_RETRY_AFTER_MS);
     }, 150);
   }
 

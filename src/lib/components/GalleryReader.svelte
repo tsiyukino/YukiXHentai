@@ -225,7 +225,7 @@
       if (!alive || !gallery) return;
       // Re-read entry after batch fetch populated gallery.pages.
       entry = gallery.pages[pageIdx];
-      if (!entry || !entry.page_url) return;
+      if (!entry || (!entry.page_url && !entry.image_path)) return;
     }
 
     if (entry.image_path) {
@@ -284,7 +284,15 @@
     }
 
     const entry = gallery.pages[pageIdx];
-    if (!entry || !entry.thumb_url) return; // Stub — batch observer will deliver the entry.
+    if (!entry) return; // Stub — batch observer will deliver the entry.
+
+    // For local galleries, image_path is the full-size local file — use it directly as thumb.
+    if (!entry.thumb_url && entry.image_path) {
+      thumbPaths[pageIdx] = convertFileSrc(entry.image_path);
+      return;
+    }
+
+    if (!entry.thumb_url) return; // Not yet loaded — batch observer will deliver the entry.
 
     enqueuePageThumb(gallery.gid, pageIdx, entry.thumb_url);
   }
@@ -365,6 +373,11 @@
 
   async function _fetchStripBatchImpl(gid: number, detailPage: number) {
     if (!alive || !gallery || activeGid !== gid) return;
+
+    // Local galleries have image_path set and empty page_url — no network fetch needed.
+    // enqueueThumb handles these directly via image_path.
+    const firstPage = gallery.pages[0];
+    if (firstPage && firstPage.image_path && !firstPage.page_url) return;
 
     const bs = get(detailBatchState);
     // Don't fetch if already fetched (could be fetched by detail page in the background).

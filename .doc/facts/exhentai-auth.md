@@ -12,6 +12,7 @@
 - E-Hentai API (`api.e-hentai.org`) works without `igneous`
 
 ## Thumbnail CDN
-- Thumbnails served from `ehgt.org` — no authentication required
+- Gallery cover thumbnails served from `s.exhentai.org` — no authentication required (public CDN)
+- Detail page preview thumbnails served from `ehgt.org` — no authentication required
 - No rate limiting on CDN thumbnail downloads
 - Parallel downloads OK for thumbnails

@@ -4,14 +4,17 @@ mod db;
 mod download;
 mod http;
 mod images;
+mod library;
 mod models;
 
 use std::sync::Arc;
 
-use commands::{DefaultCacheDir, DownloadCancellation, PageThumbCancellation, SyncCursor};
+use commands::{DataLocalDir, DefaultCacheDir, DownloadCancellation, PageThumbCancellation, SyncCursor, ThumbClient};
 use config::ConfigState;
 use db::DbState;
+use db::library::LibraryDbState;
 use download::ImageDownloadQueue;
+use download::local_queue::LocalDownloadQueue;
 use http::{GdataRateLimiter, RateLimiter};
 use images::{OriginalsCache, PageThumbCache, ThumbCache};
 
@@ -28,23 +31,43 @@ pub fn run() {
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join("yukixhentai");
 
+    // On Windows, dirs::cache_dir() == dirs::data_local_dir(), so appending "yukixhentai"
+    // alone would put cache files in the same directory as permanent data (library/).
+    // We add a "cache" subdirectory so that {data_dir}/cache/ and {data_dir}/library/
+    // are always distinct and clearing the cache can never touch library files.
     let cache_dir = dirs::cache_dir()
         .unwrap_or_else(|| data_dir.clone())
-        .join("yukixhentai");
+        .join("yukixhentai")
+        .join("cache");
 
     let config_state = ConfigState::load(config_dir.clone());
 
-    // Build an HTTP client for the download queue using stored cookies.
-    let queue_client = {
+    // Build HTTP clients using stored cookies (if already logged in from a previous session).
+    let (queue_client, local_queue_client, thumb_client_init) = {
         let config = config_state.config.lock().unwrap();
         if let Some(cookies) = config.auth.to_cookies() {
-            http::build_client(&cookies).ok()
+            let c1 = http::build_client(&cookies).ok();
+            let c2 = http::build_client(&cookies).ok();
+            let c3 = http::build_client(&cookies).ok();
+            (c1, c2, c3)
         } else {
-            None
+            (None, None, None)
         }
     };
 
-    let db_state = DbState::open(data_dir).expect("Failed to open database");
+    // Shared thumbnail client — persists across scroll batches so the connection
+    // pool to s.exhentai.org / ehgt.org stays alive between requests.
+    let thumb_client = ThumbClient::new();
+    if let Some(c) = thumb_client_init {
+        // Synchronously pre-populate using block_in_place since we're not in async yet.
+        // Use a one-shot runtime just to drive the async set().
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        rt.block_on(thumb_client.set(c));
+    }
+
+    let db_state = DbState::open(data_dir.clone()).expect("Failed to open database");
+    let library_db_state = LibraryDbState::open(data_dir.clone()).expect("Failed to open library database");
+    let library_db_state_arc = Arc::new(library_db_state);
     let rate_limiter = RateLimiter::new(1000); // 1s minimum between requests
     let gdata_rate_limiter = GdataRateLimiter::new(4, 5); // 4 requests burst, then 5s cooldown
     let thumb_cache = ThumbCache::new(cache_dir.clone());
@@ -60,6 +83,9 @@ pub fn run() {
     let default_cache_dir_state = DefaultCacheDir {
         path: cache_dir.clone(),
     };
+    let data_local_dir_state = DataLocalDir {
+        path: data_dir.clone(),
+    };
 
     // Wrap shared state in Arc for the download queue.
     let rate_limiter_arc = Arc::new(rate_limiter);
@@ -68,9 +94,11 @@ pub fn run() {
     let originals_cache_arc = Arc::new(originals_cache);
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(config_state)
         .manage(db_state_arc.clone() as Arc<DbState>)
+        .manage(library_db_state_arc.clone() as Arc<LibraryDbState>)
         .manage(rate_limiter_arc.clone() as Arc<RateLimiter>)
         .manage(gdata_rate_limiter_arc.clone() as Arc<GdataRateLimiter>)
         .manage(thumb_cache)
@@ -80,6 +108,8 @@ pub fn run() {
         .manage(page_thumb_cancellation)
         .manage(download_cancellation)
         .manage(default_cache_dir_state)
+        .manage(data_local_dir_state)
+        .manage(thumb_client)
         .setup(move |app| {
             use tauri::Manager;
             // Create the download queue now that we have an AppHandle.
@@ -96,6 +126,21 @@ pub fn run() {
                 originals_cache_arc.clone(),
             );
             app.manage(queue);
+            // Create the local download queue with its own HTTP client.
+            let local_client = local_queue_client.unwrap_or_else(|| reqwest::Client::new());
+            let config_snapshot = {
+                use tauri::Manager;
+                app.state::<ConfigState>().config.lock().unwrap().clone()
+            };
+            let local_queue = LocalDownloadQueue::new(
+                app.handle().clone(),
+                local_client,
+                rate_limiter_arc.clone(),
+                library_db_state_arc.clone(),
+                data_dir.clone(),
+                config_snapshot,
+            );
+            app.manage(local_queue);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -134,12 +179,40 @@ pub fn run() {
             commands::set_theme,
             commands::get_cache_dir,
             commands::set_cache_dir,
+            commands::get_library_dir,
+            commands::set_library_dir,
             commands::clear_image_cache,
             commands::start_enrichment,
             commands::search_exhentai,
             commands::get_search_history,
             commands::clear_search_history,
             commands::search_tags_autocomplete,
+            commands::get_favorite_status,
+            commands::add_favorite,
+            commands::remove_favorite,
+            commands::fetch_favorites,
+            commands::get_favorite_folders,
+            commands::get_read_cache_stats,
+            commands::set_read_cache_max_mb,
+            commands::clear_read_cache,
+            commands::get_local_galleries,
+            commands::get_local_gallery_pages,
+            commands::update_gallery_metadata,
+            commands::reorder_local_pages,
+            commands::insert_local_pages,
+            commands::remove_local_page,
+            commands::set_local_gallery_cover,
+            commands::import_local_folder,
+            commands::confirm_import_local_folder,
+            commands::parse_download_queue_json,
+            commands::resolve_gallery_token,
+            commands::submit_download_queue,
+            commands::get_download_queue_status,
+            commands::pause_download_queue,
+            commands::resume_download_queue,
+            commands::cancel_download_queue,
+            commands::delete_local_gallery,
+            commands::sync_local_gallery,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
