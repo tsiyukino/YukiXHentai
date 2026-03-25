@@ -153,6 +153,14 @@ export function clearReadCache() {
   return invoke<number>("clear_read_cache");
 }
 
+export function getHistoryRetentionDays() {
+  return invoke<number>("get_history_retention_days");
+}
+
+export function setHistoryRetentionDays(days: number) {
+  return invoke<void>("set_history_retention_days", { days });
+}
+
 export function parseDownloadQueueJson(filePath: string) {
   return invoke<QueueEntry[]>("parse_download_queue_json", { filePath });
 }

@@ -66,7 +66,12 @@ pub fn run() {
     }
 
     let db_state = DbState::open(data_dir.clone()).expect("Failed to open database");
-    let library_db_state = LibraryDbState::open(data_dir.clone()).expect("Failed to open library database");
+    // library.db lives inside the library folder, not alongside yukixhentai.db.
+    let library_dir_path = {
+        let config = config_state.config.lock().unwrap();
+        crate::library::library_dir(&config, &data_dir)
+    };
+    let library_db_state = LibraryDbState::open(library_dir_path).expect("Failed to open library database");
     let library_db_state_arc = Arc::new(library_db_state);
     let rate_limiter = RateLimiter::new(1000); // 1s minimum between requests
     let gdata_rate_limiter = GdataRateLimiter::new(4, 5); // 4 requests burst, then 5s cooldown
@@ -91,6 +96,11 @@ pub fn run() {
     let rate_limiter_arc = Arc::new(rate_limiter);
     let gdata_rate_limiter_arc = Arc::new(gdata_rate_limiter);
     let db_state_arc = Arc::new(db_state);
+    let db_state_for_exit = db_state_arc.clone(); // kept for on-exit cleanup
+    let history_retention_days = {
+        let config = config_state.config.lock().unwrap();
+        config.history.retention_days
+    };
     let originals_cache_arc = Arc::new(originals_cache);
 
     tauri::Builder::default()
@@ -195,6 +205,8 @@ pub fn run() {
             commands::get_read_cache_stats,
             commands::set_read_cache_max_mb,
             commands::clear_read_cache,
+            commands::get_history_retention_days,
+            commands::set_history_retention_days,
             commands::get_local_galleries,
             commands::get_local_gallery_pages,
             commands::update_gallery_metadata,
@@ -214,6 +226,31 @@ pub fn run() {
             commands::delete_local_gallery,
             commands::sync_local_gallery,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(move |_app, event| {
+            if let tauri::RunEvent::Exit = event {
+                // Auto-clean old reading history before clearing ephemeral data.
+                if let Err(e) = db_state_for_exit.clean_old_reading_history(history_retention_days) {
+                    tracing::warn!("Failed to clean reading history on exit: {}", e);
+                }
+                // Clear ephemeral browse DB on exit (keeps search_history, reading_sessions, reading_progress).
+                if let Err(e) = db_state_for_exit.clear_all() {
+                    tracing::warn!("Failed to clear yukixhentai.db on exit: {}", e);
+                }
+                // Clear cache directory contents (but not the directory itself).
+                if cache_dir.exists() {
+                    if let Ok(entries) = std::fs::read_dir(&cache_dir) {
+                        for entry in entries.flatten() {
+                            let p = entry.path();
+                            if p.is_dir() {
+                                let _ = std::fs::remove_dir_all(&p);
+                            } else {
+                                let _ = std::fs::remove_file(&p);
+                            }
+                        }
+                    }
+                }
+            }
+        });
 }

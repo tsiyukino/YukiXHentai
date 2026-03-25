@@ -1,5 +1,5 @@
 /// Separate SQLite database for local gallery library data.
-/// Path: {data_local_dir}/yukixhentai/library.db
+/// Path: {library_dir}/library.db  (lives alongside the gallery folders)
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -18,9 +18,11 @@ pub struct LibraryDbState {
 }
 
 impl LibraryDbState {
-    pub fn open(data_dir: PathBuf) -> Result<Self, String> {
-        std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
-        let db_path = data_dir.join("library.db");
+    /// Open (or create) library.db inside `library_dir`.
+    /// `library_dir` is the root gallery library folder (e.g. {data_local_dir}/yukixhentai/library/).
+    pub fn open(library_dir: PathBuf) -> Result<Self, String> {
+        std::fs::create_dir_all(&library_dir).map_err(|e| e.to_string())?;
+        let db_path = library_dir.join("library.db");
         let conn = Connection::open(&db_path).map_err(|e| e.to_string())?;
         conn.execute_batch("PRAGMA journal_mode=WAL;").map_err(|e| e.to_string())?;
         conn.execute_batch("PRAGMA foreign_keys=ON;").map_err(|e| e.to_string())?;

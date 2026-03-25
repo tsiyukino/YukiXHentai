@@ -68,3 +68,11 @@ Config file: `{platform_config_dir}/yukixhentai/config.toml`
 - **Default:** `None` (uses `{data_local_dir}/yukixhentai/library/`)
 - **Used by:** `library::library_dir`, `commands/confirm_import_local_folder`, `commands/get_library_dir`, `commands/set_library_dir`, `download::local_queue` worker
 - **Notes:** Root directory for locally-imported galleries. Each gallery gets a subfolder `{gid}_{sanitized_title}/`. None = default location. Set via `set_library_dir` IPC.
+
+## [history] section
+
+### history.retention_days
+- **Type:** `i64`
+- **Default:** `7`
+- **Used by:** `lib.rs` exit handler (`db::clean_old_reading_history`)
+- **Notes:** Reading sessions and orphaned reading_progress older than this many days are deleted on app exit. `0` = keep forever. Search history is never auto-cleaned by this setting.

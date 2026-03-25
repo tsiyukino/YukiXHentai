@@ -15,6 +15,8 @@ pub struct AppConfig {
     pub ui: UiConfig,
     #[serde(default)]
     pub storage: StorageConfig,
+    #[serde(default)]
+    pub history: HistoryConfig,
 }
 
 /// UI preferences section of the config.
@@ -60,6 +62,26 @@ pub struct StorageConfig {
 
 fn default_read_cache_max_mb() -> u64 {
     512
+}
+
+/// History retention settings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistoryConfig {
+    /// Auto-clean reading history older than this many days on exit. 0 = keep forever. Default: 7.
+    #[serde(default = "default_history_retention_days")]
+    pub retention_days: i64,
+}
+
+impl Default for HistoryConfig {
+    fn default() -> Self {
+        Self {
+            retention_days: default_history_retention_days(),
+        }
+    }
+}
+
+fn default_history_retention_days() -> i64 {
+    7
 }
 
 /// Authentication section of the config.

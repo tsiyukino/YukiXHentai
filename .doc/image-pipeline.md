@@ -7,6 +7,7 @@
 - All three caches (originals, page-thumbs, thumbs) live under this base.
 - Changing the cache dir requires restart (caches are initialized once at startup).
 - `clear_image_cache` IPC command deletes all cached files and clears DB paths.
+- On program exit, all cache directory contents are deleted automatically (RunEvent::Exit hook in lib.rs). The directory itself is preserved; only its contents are removed.
 
 ## OriginalsCache
 - **Signature:** `struct OriginalsCache { base_dir: PathBuf }`

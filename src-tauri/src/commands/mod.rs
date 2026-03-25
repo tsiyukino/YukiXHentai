@@ -1930,6 +1930,32 @@ pub async fn clear_read_cache(
     Ok(bytes_freed)
 }
 
+// ── History settings ──────────────────────────────────────────────────────
+
+/// Get the reading history retention period in days (0 = keep forever).
+#[tauri::command]
+pub async fn get_history_retention_days(
+    config_state: State<'_, ConfigState>,
+) -> Result<i64, String> {
+    let config = config_state.config.lock().map_err(|e| e.to_string())?;
+    Ok(config.history.retention_days)
+}
+
+/// Set the reading history retention period in days (0 = keep forever, max 365).
+#[tauri::command]
+pub async fn set_history_retention_days(
+    days: i64,
+    config_state: State<'_, ConfigState>,
+) -> Result<(), String> {
+    let clamped = days.clamp(0, 365);
+    {
+        let mut config = config_state.config.lock().map_err(|e| e.to_string())?;
+        config.history.retention_days = clamped;
+    }
+    config_state.save()?;
+    Ok(())
+}
+
 // ── Local gallery commands ────────────────────────────────────────────────
 
 /// Get a page of locally-imported galleries.

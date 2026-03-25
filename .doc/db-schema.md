@@ -2,7 +2,8 @@
 > Last updated: 2026-03-25 (library.db: separate local library database) | Affects: src-tauri/src/db/
 
 ## library.db
-`{data_local_dir}/yukixhentai/library.db`
+`{library_dir}/library.db`  (default: `{data_local_dir}/yukixhentai/library/library.db`)
+- Lives alongside the gallery folders inside the library root. Never cleared on exit.
 - Separate database for local library data. Created at first launch.
 - Schema version tracked in its own `schema_version` table. Current: v1.
 - Tables: `galleries`, `gallery_tags`, `local_gallery_pages`, `reading_progress`, `reading_sessions`
@@ -96,7 +97,7 @@ CREATE TABLE reading_progress (
 );
 ```
 - **Used by:** `db::get_read_progress`, `db::update_read_progress`, `db::get_read_progress_batch`
-- **Notes:** Upsert on gid. is_completed stored as 0/1. Migration v5.
+- **Notes:** Upsert on gid. is_completed stored as 0/1. **Not cleared on exit** — cleaned by `clean_old_reading_history` (orphaned rows older than `history.retention_days`). Migration v5.
 
 ## reading_sessions
 - **Schema:**
@@ -111,7 +112,7 @@ CREATE TABLE reading_sessions (
 ```
 - **Indexes:** `idx_reading_sessions_gid`, `idx_reading_sessions_opened(opened_at DESC)`
 - **Used by:** `db::start_reading_session`, `db::end_reading_session`, `db::get_reading_history`
-- **Notes:** One row per reading session. closed_at NULL until session ends. Migration v6.
+- **Notes:** One row per reading session. closed_at NULL until session ends. **Not cleared on exit** — auto-cleaned on exit by `clean_old_reading_history` (rows with `opened_at` older than `history.retention_days`). Migration v6.
 
 ## cloud_favorites
 - **Schema:**
@@ -151,7 +152,7 @@ CREATE TABLE search_history (
 ```
 - **Indexes:** `idx_search_history_searched_at(searched_at DESC)`
 - **Used by:** `db::add_search_history`, `db::get_search_history`, `db::clear_search_history`
-- **Notes:** Stores last 20 search queries. Deduplicates by updating timestamp (case-insensitive). Auto-trims to 20 entries on insert. Migration v10.
+- **Notes:** Stores last 20 search queries. Deduplicates by updating timestamp (case-insensitive). Auto-trims to 20 entries on insert. **Not cleared on exit** — persists until user explicitly clears. Migration v10.
 
 ## read_cache_index (v12)
 - **Schema:**

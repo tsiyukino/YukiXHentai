@@ -8,7 +8,7 @@
   import type { Theme } from "$lib/stores/ui";
   import { login, logout } from "$lib/api/auth";
   import { getDetailPreviewSize, setDetailPreviewSize, getCacheDir, setCacheDir, clearImageCache, setTheme } from "$lib/api/reader";
-  import { getReadCacheStats, setReadCacheMaxMb, clearReadCache, getLibraryDir, setLibraryDir, type ReadCacheStats } from "$lib/api/library";
+  import { getReadCacheStats, setReadCacheMaxMb, clearReadCache, getLibraryDir, setLibraryDir, getHistoryRetentionDays, setHistoryRetentionDays, type ReadCacheStats } from "$lib/api/library";
 
   // Account
   let ipbMemberId = $state("");
@@ -20,6 +20,9 @@
     $theme = newTheme;
     setTheme(newTheme).catch(() => {});
   }
+
+  // History retention
+  let historyRetentionDays = $state(7);
 
   // Network placeholders
   let proxyType = $state<"none" | "http" | "socks5">("none");
@@ -55,6 +58,9 @@
     } catch {}
     try {
       downloadDir = await getLibraryDir();
+    } catch {}
+    try {
+      historyRetentionDays = await getHistoryRetentionDays();
     } catch {}
   });
 
@@ -269,6 +275,7 @@
             {/each}
           </select>
         </div>
+
       </div>
 
     {:else if activeSection === "storage"}
@@ -354,6 +361,27 @@
           {#if readCacheMessage}
             <p class="message success">{readCacheMessage}</p>
           {/if}
+        </div>
+
+        <div class="field-row">
+          <label class="field-label">History retention</label>
+          <select
+            value={historyRetentionDays}
+            onchange={async (e) => {
+              const days = parseInt((e.target as HTMLSelectElement).value, 10);
+              historyRetentionDays = days;
+              try { await setHistoryRetentionDays(days); } catch {}
+            }}
+          >
+            <option value={0}>Keep forever</option>
+            <option value={3}>3 days</option>
+            <option value={7}>7 days</option>
+            <option value={14}>14 days</option>
+            <option value={30}>30 days</option>
+            <option value={90}>90 days</option>
+            <option value={365}>1 year</option>
+          </select>
+          <p class="hint">Reading history older than this is deleted on app close. Search history is never auto-deleted.</p>
         </div>
       </div>
 

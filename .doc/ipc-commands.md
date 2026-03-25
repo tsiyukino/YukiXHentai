@@ -219,6 +219,16 @@
 - **Signature:** `invoke("clear_read_cache") -> number`
 - **Notes:** Deletes all originals cache files tracked in `read_cache_index`, clears `gallery_pages.image_path` entries, removes files from disk. Returns bytes freed.
 
+## get_history_retention_days
+- **Signature:** `invoke("get_history_retention_days") -> number`
+- **Used by:** `SettingsPage.svelte` (Preference section)
+- **Notes:** Returns `[history].retention_days` from config. Default 7. `0` = keep forever.
+
+## set_history_retention_days
+- **Signature:** `invoke("set_history_retention_days", { days: number }) -> void`
+- **Used by:** `SettingsPage.svelte` (Preference section)
+- **Notes:** Sets `[history].retention_days` (clamped 0–365). Persists to config.toml. Takes effect on next app exit.
+
 ## get_local_galleries
 - **Signature:** `invoke("get_local_galleries", { offset: number, limit: number }) -> GalleryPage`
 - **Notes:** Returns galleries where `is_local=1`, ordered by posted DESC. Tags include both `gallery_tags` and `local_tags`.

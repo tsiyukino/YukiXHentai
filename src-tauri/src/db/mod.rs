@@ -148,6 +148,54 @@ impl DbState {
         Ok(())
     }
 
+    /// Delete all data rows from every table and VACUUM.
+    /// Called on exit to keep the ephemeral browse/cache DB small.
+    pub fn clear_all(&self) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        // Disable FK enforcement so deleting galleries does not cascade into
+        // reading_sessions / reading_progress / search_history (those are kept).
+        conn.execute_batch(
+            "PRAGMA foreign_keys = OFF;
+             DELETE FROM gallery_tags;
+             DELETE FROM gallery_pages;
+             DELETE FROM local_gallery_pages;
+             DELETE FROM local_tags;
+             DELETE FROM cloud_favorites;
+             DELETE FROM favorite_folders;
+             DELETE FROM read_cache_index;
+             DELETE FROM filter_presets;
+             DELETE FROM galleries;
+             PRAGMA foreign_keys = ON;
+             VACUUM;",
+        ).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Delete reading sessions (and orphaned reading_progress) older than `days` days.
+    /// Called on exit based on `history.retention_days` config. 0 = keep forever.
+    pub fn clean_old_reading_history(&self, days: i64) -> Result<(), String> {
+        if days <= 0 {
+            return Ok(());
+        }
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let cutoff = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64
+            - days * 86400;
+        // Delete old sessions.
+        conn.execute(
+            "DELETE FROM reading_sessions WHERE opened_at < ?1",
+            rusqlite::params![cutoff],
+        ).map_err(|e| e.to_string())?;
+        // Clean up reading_progress for galleries with no remaining sessions and no recent progress.
+        conn.execute(
+            "DELETE FROM reading_progress WHERE gid NOT IN (SELECT DISTINCT gid FROM reading_sessions) AND last_read_at < ?1",
+            rusqlite::params![cutoff],
+        ).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     /// Upsert a gallery and its tags with a specific metadata source.
     /// `metadata_source` should be "browse" or "api".
     pub fn upsert_gallery_with_source(&self, gallery: &Gallery, metadata_source: &str) -> Result<(), String> {
