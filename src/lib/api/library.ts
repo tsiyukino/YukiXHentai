@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { LocalReaderGallery } from "$lib/stores/localLibrary";
 
 export interface LocalPage {
   gid: number;
@@ -9,10 +10,24 @@ export interface LocalPage {
   height?: number;
 }
 
+/** Build a LocalReaderGallery from a gallery title/gid and its pages array. */
+export function buildLocalReaderGallery(
+  gid: number,
+  title: string,
+  pages: LocalPage[]
+): LocalReaderGallery {
+  return {
+    gid,
+    title,
+    pages: pages.map(p => ({ page_index: p.page_index, file_path: p.file_path })),
+    total_pages: pages.length,
+  };
+}
+
 export interface ReadCacheStats {
-  usedBytes: number;
-  maxBytes: number;
-  fileCount: number;
+  used_bytes: number;
+  max_bytes: number;
+  file_count: number;
 }
 
 export interface GalleryMetadataPatch {
@@ -26,13 +41,13 @@ export interface GalleryMetadataPatch {
 }
 
 export interface ImportPreview {
-  detectedTitle: string;
-  detectedGid?: number;
-  detectedToken?: string;
-  metadataFound: boolean;
-  pageCount: number;
-  sampleFilenames: string[];
-  parsedMeta?: LocalGalleryMeta;
+  detected_title: string;
+  detected_gid?: number;
+  detected_token?: string;
+  metadata_found: boolean;
+  page_count: number;
+  sample_filenames: string[];
+  parsed_meta?: LocalGalleryMeta;
 }
 
 export interface LocalGalleryMeta {
@@ -59,7 +74,7 @@ export interface QueueEntry {
   gid: number;
   token?: string;
   title?: string;
-  alreadyLocal: boolean;
+  already_local: boolean;
 }
 
 export interface ResolvedGallery {
@@ -76,7 +91,7 @@ export interface SubmitEntry {
 
 export interface SubmitResult {
   queued: number;
-  skippedAlreadyLocal: number;
+  skipped_already_local: number;
 }
 
 export interface DownloadQueueStatus {
@@ -84,10 +99,10 @@ export interface DownloadQueueStatus {
   downloading: number;
   completed: number;
   failed: number;
-  currentGid?: number;
-  currentTitle?: string;
-  currentPage?: number;
-  totalPages?: number;
+  current_gid?: number;
+  current_title?: string;
+  current_page?: number;
+  total_pages?: number;
 }
 
 export function getLocalGalleries(offset: number, limit: number) {

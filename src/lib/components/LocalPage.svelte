@@ -300,15 +300,15 @@
         <div class="banner-spinner"></div>
         <div class="banner-text">
           <span class="banner-title">
-            {#if downloadStatus.currentTitle}
-              {$t("download_banner.downloading", { title: downloadStatus.currentTitle })}
+            {#if downloadStatus.current_title}
+              {$t("download_banner.downloading", { title: downloadStatus.current_title })}
             {:else}
               {$t("download_banner.downloading", { title: "..." })}
             {/if}
           </span>
-          {#if downloadStatus.currentPage !== undefined && downloadStatus.totalPages}
+          {#if downloadStatus.current_page !== undefined && downloadStatus.total_pages}
             <span class="banner-progress">
-              {$t("download_banner.page_progress", { current: downloadStatus.currentPage, total: downloadStatus.totalPages })}
+              {$t("download_banner.page_progress", { current: downloadStatus.current_page, total: downloadStatus.total_pages })}
             </span>
           {/if}
         </div>

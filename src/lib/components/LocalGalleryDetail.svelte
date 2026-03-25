@@ -4,8 +4,8 @@
   import { categoryColor } from "$lib/utils/category";
   import { localDetailGallery, localReaderGallery, localReaderPage, localReaderMode, localReaderSourceGallery } from "$lib/stores/localLibrary";
   import { libraryRefreshTick } from "$lib/stores/ui";
-  import { getLocalGalleryPages, deleteLocalGallery } from "$lib/api/library";
-  import { getReadProgress, startReadingSession, updateReadProgress } from "$lib/api/reader";
+  import { getLocalGalleryPages, deleteLocalGallery, buildLocalReaderGallery } from "$lib/api/library";
+  import { getLocalReadProgress, startLocalReadingSession } from "$lib/api/reader";
   import LocalMetadataEditor from "./LocalMetadataEditor.svelte";
   import type { LocalPage } from "$lib/api/library";
 
@@ -38,6 +38,7 @@
     pages = [];
     deleteMessage = "";
     showMetadataEditor = false;
+    deleting = false;
 
     if (g) {
       currentGid = g.gid;
@@ -61,46 +62,28 @@
     }
   }
 
-  async function handleRead(startPage = 0) {
-    if (!gallery || pages.length === 0) return;
-    const now = Math.floor(Date.now() / 1000);
-
-    // Resume from last position if not completed.
-    try {
-      const progress = await getReadProgress(gallery.gid, true);
-      if (progress && !progress.is_completed) {
-        startPage = progress.last_page_read;
-      }
-    } catch { /* ignore */ }
-
-    await startReadingSession(gallery.gid, now, true).catch(() => {});
-
+  function openReader(startPage: number) {
     $localReaderPage = startPage;
     $localReaderMode = "page";
-    $localReaderSourceGallery = gallery;
-    $localReaderGallery = {
-      gid: gallery.gid,
-      title: gallery.title,
-      pages: pages.map(p => ({ page_index: p.page_index, file_path: p.file_path })),
-      total_pages: pages.length,
-    };
+    $localReaderSourceGallery = gallery!;
+    $localReaderGallery = buildLocalReaderGallery(gallery!.gid, gallery!.title, pages);
     $localDetailGallery = null;
+  }
+
+  async function handleRead(startPage = 0) {
+    if (!gallery || pages.length === 0) return;
+    try {
+      const progress = await getLocalReadProgress(gallery.gid);
+      if (progress && !progress.is_completed) startPage = progress.last_page_read;
+    } catch { /* ignore */ }
+    await startLocalReadingSession(gallery.gid, Math.floor(Date.now() / 1000)).catch(() => {});
+    openReader(startPage);
   }
 
   async function handleOpenPage(pageIdx: number) {
     if (!gallery || pages.length === 0) return;
-    const now = Math.floor(Date.now() / 1000);
-    await startReadingSession(gallery.gid, now, true).catch(() => {});
-    $localReaderPage = pageIdx;
-    $localReaderMode = "page";
-    $localReaderSourceGallery = gallery;
-    $localReaderGallery = {
-      gid: gallery.gid,
-      title: gallery.title,
-      pages: pages.map(p => ({ page_index: p.page_index, file_path: p.file_path })),
-      total_pages: pages.length,
-    };
-    $localDetailGallery = null;
+    await startLocalReadingSession(gallery.gid, Math.floor(Date.now() / 1000)).catch(() => {});
+    openReader(pageIdx);
   }
 
   async function handleDelete() {

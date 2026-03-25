@@ -5,7 +5,7 @@
   import { t } from "$lib/i18n";
   import Slider from "./Slider.svelte";
   import { localReaderGallery, localReaderPage, localReaderMode, localDetailGallery, localReaderSourceGallery } from "$lib/stores/localLibrary";
-  import { updateReadProgress } from "$lib/api/reader";
+  import { updateLocalReadProgress } from "$lib/api/reader";
 
   let gallery = $derived($localReaderGallery);
   let currentPage = $derived($localReaderPage);
@@ -100,15 +100,14 @@
 
   async function saveProgress(pageIdx: number) {
     if (!gallery) return;
-    const isCompleted = pageIdx >= totalPages - 1;
     try {
-      await updateReadProgress({
+      await updateLocalReadProgress({
         gid: gallery.gid,
         last_page_read: pageIdx,
         total_pages: totalPages,
         last_read_at: Math.floor(Date.now() / 1000),
-        is_completed: isCompleted,
-      }, true);
+        is_completed: pageIdx >= totalPages - 1,
+      });
     } catch { /* not critical */ }
   }
 

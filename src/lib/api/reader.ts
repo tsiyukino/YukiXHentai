@@ -138,6 +138,12 @@ export async function getReadProgressBatch(gids: number[], isLocal = false): Pro
   return invoke("get_read_progress_batch", { gids, isLocal });
 }
 
+// Convenience wrappers — callers don't need to pass isLocal.
+export const updateLocalReadProgress  = (p: ReadProgress) => updateReadProgress(p, true);
+export const updateRemoteReadProgress = (p: ReadProgress) => updateReadProgress(p, false);
+export const getLocalReadProgress     = (gid: number)     => getReadProgress(gid, true);
+export const getRemoteReadProgress    = (gid: number)     => getReadProgress(gid, false);
+
 // ── Reading sessions ──────────────────────────────────────────────────────
 
 export async function startReadingSession(gid: number, openedAt: number, isLocal = false): Promise<number> {
@@ -152,6 +158,9 @@ export async function endReadingSession(
 ): Promise<void> {
   return invoke("end_reading_session", { sessionId, closedAt, pagesRead, isLocal });
 }
+
+export const startLocalReadingSession  = (gid: number, openedAt: number) => startReadingSession(gid, openedAt, true);
+export const startRemoteReadingSession = (gid: number, openedAt: number) => startReadingSession(gid, openedAt, false);
 
 export async function getReadingHistory(
   limit: number,

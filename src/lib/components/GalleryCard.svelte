@@ -11,15 +11,21 @@
     gallery,
     progress,
     onOpen,
+    overrideImgSrc,
+    noTagNav = false,
   }: {
     gallery: Gallery;
     progress?: ReadProgress | null;
     onOpen?: (gallery: Gallery) => void;
+    /** Override computed thumbnail src (e.g. for local galleries using convertFileSrc). */
+    overrideImgSrc?: string;
+    /** Disable tag-click navigation (e.g. local library context). */
+    noTagNav?: boolean;
   } = $props();
 
   function handleTagClick(e: MouseEvent, tag: Tag) {
+    if (noTagNav) return;
     e.stopPropagation();
-    // Add as include tag chip so it appears as a green chip in the search UI.
     if (!$searchIncludeTags.some(t => t.namespace === tag.namespace && t.name === tag.name)) {
       $searchIncludeTags = [...$searchIncludeTags, { namespace: tag.namespace, name: tag.name }];
     }
@@ -27,7 +33,7 @@
     $currentPage = "search";
   }
 
-  let imgSrc = $derived(thumbSrc(gallery.thumb_path, gallery.thumb_url));
+  let imgSrc = $derived(overrideImgSrc ?? thumbSrc(gallery.thumb_path, gallery.thumb_url));
   let catColor = $derived(categoryColor(gallery.category));
   let stars = $derived("★".repeat(Math.round(gallery.rating)));
   let langTag = $derived(gallery.tags.find(t => t.namespace === "language")?.name ?? null);

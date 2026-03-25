@@ -83,8 +83,8 @@
         gid: e.gid,
         token: e.token ?? null,
         title: e.title ?? null,
-        alreadyLocal: e.alreadyLocal,
-        status: e.alreadyLocal ? "already_local" : (e.token ? "ready" : "pending"),
+        alreadyLocal: e.already_local,
+        status: e.already_local ? "already_local" : (e.token ? "ready" : "pending"),
       }));
       submitMessage = null;
       submitError = null;

@@ -51,7 +51,7 @@
     } catch {}
     try {
       readCacheStats = await getReadCacheStats();
-      readCacheMaxMb = Math.round((readCacheStats.maxBytes || 512 * 1024 * 1024) / 1024 / 1024);
+      readCacheMaxMb = Math.round((readCacheStats.max_bytes || 512 * 1024 * 1024) / 1024 / 1024);
     } catch {}
     try {
       downloadDir = await getLibraryDir();
@@ -315,17 +315,17 @@
             />
             <span class="slider-value">{readCacheMaxMb} MB</span>
           </div>
-          {#if readCacheStats && readCacheStats.maxBytes > 0}
+          {#if readCacheStats && readCacheStats.max_bytes > 0}
             <div class="cache-usage-row">
               <div class="cache-usage-bar">
                 <div
                   class="cache-usage-fill"
-                  style="width: {Math.min(100, (readCacheStats.usedBytes / readCacheStats.maxBytes) * 100).toFixed(1)}%"
+                  style="width: {Math.min(100, (readCacheStats.used_bytes / readCacheStats.max_bytes) * 100).toFixed(1)}%"
                 ></div>
               </div>
               <span class="cache-usage-label">
-                {(readCacheStats.usedBytes / 1024 / 1024).toFixed(1)} MB / {(readCacheStats.maxBytes / 1024 / 1024).toFixed(0)} MB
-                ({readCacheStats.fileCount} {readCacheStats.fileCount === 1 ? "file" : "files"})
+                {(readCacheStats.used_bytes / 1024 / 1024).toFixed(1)} MB / {(readCacheStats.max_bytes / 1024 / 1024).toFixed(0)} MB
+                ({readCacheStats.file_count} {readCacheStats.file_count === 1 ? "file" : "files"})
               </span>
             </div>
           {/if}

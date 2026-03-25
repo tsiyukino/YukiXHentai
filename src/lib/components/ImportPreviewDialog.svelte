@@ -17,11 +17,11 @@
 
   let { folderPath, preview, onConfirm, onClose }: Props = $props();
 
-  let title = $state(preview.parsedMeta?.title ?? preview.detectedTitle);
-  let titleJpn = $state(preview.parsedMeta?.titleJpn ?? "");
-  let category = $state(preview.parsedMeta?.category ?? "Misc");
-  let uploader = $state(preview.parsedMeta?.uploader ?? "");
-  let description = $state(preview.parsedMeta?.description ?? "");
+  let title = $state(preview.parsed_meta?.title ?? preview.detected_title);
+  let titleJpn = $state(preview.parsed_meta?.titleJpn ?? "");
+  let category = $state(preview.parsed_meta?.category ?? "Misc");
+  let uploader = $state(preview.parsed_meta?.uploader ?? "");
+  let description = $state(preview.parsed_meta?.description ?? "");
 
   let saving = $state(false);
   let saveError = $state<string | null>(null);
@@ -36,15 +36,15 @@
     saveError = null;
     try {
       const meta: LocalGalleryMeta = {
-        gid: preview.detectedGid,
-        token: preview.detectedToken,
+        gid: preview.detected_gid,
+        token: preview.detected_token,
         title: title.trim(),
         titleJpn: titleJpn.trim() || undefined,
         category,
         uploader: uploader.trim() || undefined,
         description: description.trim() || undefined,
-        tags: preview.parsedMeta?.tags ?? [],
-        pages: preview.parsedMeta?.pages ?? [],
+        tags: preview.parsed_meta?.tags ?? [],
+        pages: preview.parsed_meta?.pages ?? [],
       };
       const gallery = await confirmImportLocalFolder(folderPath, meta);
       onConfirm(gallery as Gallery);
@@ -74,14 +74,14 @@
 
   <div class="dialog-body">
     <!-- Metadata status badge -->
-    {#if preview.metadataFound}
+    {#if preview.metadata_found}
       <div class="badge badge-success">{$t("local.metadata_found")}</div>
     {:else}
       <div class="badge badge-muted">{$t("local.no_metadata")}</div>
     {/if}
 
     <!-- Page count -->
-    <p class="page-count-line">{$t("local.page_count", { count: preview.pageCount })}</p>
+    <p class="page-count-line">{$t("local.page_count", { count: preview.page_count })}</p>
 
     <!-- Fields -->
     <div class="field-group">
@@ -115,26 +115,26 @@
     </div>
 
     <!-- Tags from metadata -->
-    {#if preview.parsedMeta?.tags && preview.parsedMeta.tags.length > 0}
+    {#if preview.parsed_meta?.tags && preview.parsed_meta.tags.length > 0}
       <div class="field-group">
         <span class="field-label">{$t("local.tags_from_exh")}</span>
         <div class="tag-chips">
-          {#each preview.parsedMeta.tags.slice(0, 20) as tag}
+          {#each preview.parsed_meta.tags.slice(0, 20) as tag}
             <span class="tag-chip">{tag}</span>
           {/each}
-          {#if preview.parsedMeta.tags.length > 20}
-            <span class="tag-more">+{preview.parsedMeta.tags.length - 20}</span>
+          {#if preview.parsed_meta.tags.length > 20}
+            <span class="tag-more">+{preview.parsed_meta.tags.length - 20}</span>
           {/if}
         </div>
       </div>
     {/if}
 
     <!-- Sample filenames -->
-    {#if preview.sampleFilenames.length > 0}
+    {#if preview.sample_filenames.length > 0}
       <div class="field-group">
         <span class="field-label">{$t("local.sample_files")}</span>
         <div class="sample-files">
-          {#each preview.sampleFilenames.slice(0, 20) as fname}
+          {#each preview.sample_filenames.slice(0, 20) as fname}
             <span class="sample-file">{fname}</span>
           {/each}
         </div>

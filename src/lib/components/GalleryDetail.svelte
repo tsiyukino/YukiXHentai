@@ -308,7 +308,7 @@
         true,
         undefined,
       );
-      if (result.skippedAlreadyLocal > 0) {
+      if (result.skipped_already_local > 0) {
         downloadMessage = $t("detail.download_already_local");
       } else {
         downloadMessage = $t("detail.download_queued");
