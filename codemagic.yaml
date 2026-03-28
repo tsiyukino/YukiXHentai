@@ -29,30 +29,29 @@ workflows:
           cd src-tauri/gen/apple
           pod install
 
-      - name: Build app (unsigned)
+      - name: Build and package IPA (unsigned, for AltStore)
         script: |
           source $HOME/.cargo/env
           export PATH="$HOME/.cargo/bin:$PATH"
-          xcodebuild \
-            -workspace src-tauri/gen/apple/yukixhentai.xcworkspace \
-            -scheme yukixhentai_iOS \
-            -sdk iphoneos \
-            -configuration release \
-            -derivedDataPath /tmp/derived \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            build
 
-      - name: Package IPA
-        script: |
-          APP_PATH=$(find /tmp/derived/Build/Products/release-iphoneos -name "*.app" | head -1)
+          # Build via tauri (compiles Rust + runs xcodebuild archive)
+          # Use || true to allow build to succeed even if export fails
+          cargo tauri ios build --export-method ad-hoc 2>&1 | tee /tmp/tauri-build.log || true
+
+          # Find the .app from the archive or derived data
+          APP_PATH=$(find src-tauri/gen/apple/build -name "*.app" 2>/dev/null | head -1)
+          if [ -z "$APP_PATH" ]; then
+            APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -path "*/release-iphoneos/*.app" 2>/dev/null | grep -v ".xctest" | head -1)
+          fi
+
+          echo "Found app at: $APP_PATH"
           mkdir -p /tmp/Payload
           cp -r "$APP_PATH" /tmp/Payload/
           cd /tmp
           zip -r YukiXHentai.ipa Payload
           mkdir -p $CM_BUILD_DIR/output
           cp YukiXHentai.ipa $CM_BUILD_DIR/output/
+          echo "IPA created at $CM_BUILD_DIR/output/YukiXHentai.ipa"
 
     artifacts:
       - output/*.ipa
