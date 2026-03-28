@@ -61,11 +61,11 @@
 <style>
   .bottom-tab-bar {
     display: flex;
-    align-items: stretch;
+    align-items: flex-start;
     background: var(--bg-primary);
     border-top: 1px solid var(--border-strong);
     flex-shrink: 0;
-    /* Safe-area inset for devices with home indicator */
+    /* Bar visually extends to physical bottom edge; buttons sit in top 56px */
     padding-bottom: env(safe-area-inset-bottom, 0px);
     height: calc(56px + env(safe-area-inset-bottom, 0px));
     z-index: 200;
