@@ -32,7 +32,7 @@ workflows:
       - name: Build IPA (unsigned, for AltStore sideloading)
         script: |
           source $HOME/.cargo/env
-          cargo tauri ios build --export-method debugging -- CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
+          cargo tauri ios build --export-method debugging
 
     artifacts:
       - src-tauri/gen/apple/build/arm64/*.ipa
