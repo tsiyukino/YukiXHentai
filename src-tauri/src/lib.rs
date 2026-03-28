@@ -177,7 +177,7 @@ pub fn run() {
             }
             #[cfg(not(desktop))]
             {
-                use tauri::{webview::PageLoadEvent, Emitter};
+                use tauri::{webview::PageLoadEvent, Emitter, Manager};
                 if payload.event() != PageLoadEvent::Finished {
                     return;
                 }
