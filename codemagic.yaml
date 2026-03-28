@@ -1,0 +1,73 @@
+workflows:
+  ios-build:
+    name: iOS IPA Build
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+
+    environment:
+      xcode: latest
+      vars:
+        BUNDLE_ID: com.yukixhentai.app
+      groups:
+        - ios_signing  # create this group in Codemagic UI with the vars below:
+                       #   IOS_CERTIFICATE         (base64 .p12 file)
+                       #   IOS_CERTIFICATE_PASSWORD (password for .p12)
+                       #   IOS_MOBILE_PROVISION    (base64 .mobileprovision file)
+                       #   KEYCHAIN_PASSWORD        (any random string, e.g. "temppass")
+
+    scripts:
+      - name: Install Rust stable + iOS targets
+        script: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          source $HOME/.cargo/env
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+
+      - name: Install Tauri CLI
+        script: |
+          source $HOME/.cargo/env
+          cargo install tauri-cli --version "^2" --locked
+
+      - name: Install Node deps
+        script: npm install
+
+      - name: Install CocoaPods deps
+        script: |
+          cd src-tauri/gen/apple
+          pod install
+
+      - name: Install signing certificate and provisioning profile
+        script: |
+          CERTIFICATE_PATH=$RUNNER_TEMP/cert.p12
+          PP_PATH=$RUNNER_TEMP/profile.mobileprovision
+          KEYCHAIN_PATH=$RUNNER_TEMP/signing.keychain-db
+
+          echo -n "$IOS_CERTIFICATE" | base64 --decode -o $CERTIFICATE_PATH
+          echo -n "$IOS_MOBILE_PROVISION" | base64 --decode -o $PP_PATH
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security import $CERTIFICATE_PATH -P "$IOS_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security set-key-partition-list -S apple-tool:,apple: \
+            -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security list-keychain -d user -s $KEYCHAIN_PATH
+
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles/
+
+      - name: Build IPA
+        script: |
+          source $HOME/.cargo/env
+          cargo tauri ios build --export-method debugging
+
+    artifacts:
+      - src-tauri/gen/apple/build/arm64/*.ipa
+
+    publishing:
+      email:
+        recipients:
+          - your@email.com  # replace with your email
+        notify:
+          success: true
+          failure: true
