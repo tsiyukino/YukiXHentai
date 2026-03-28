@@ -35,7 +35,7 @@ jobs:
           node-version: 22
 
       - name: Install frontend deps
-        run: npm install --omit=optional
+        run: npm install
 
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2" --locked
