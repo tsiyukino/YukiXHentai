@@ -34,14 +34,17 @@ workflows:
           source $HOME/.cargo/env
           export PATH="$HOME/.cargo/bin:$PATH"
 
-          # Build via tauri (compiles Rust + runs xcodebuild archive)
-          # Use || true to allow build to succeed even if export fails
-          cargo tauri ios build --export-method ad-hoc 2>&1 | tee /tmp/tauri-build.log || true
+          # cargo tauri ios build will fail at export (no signing team) but
+          # the .app will already be built in DerivedData before that point.
+          cargo tauri ios build --export-method debugging 2>&1 | tee /tmp/tauri-build.log || true
 
-          # Find the .app from the archive or derived data
-          APP_PATH=$(find src-tauri/gen/apple/build -name "*.app" 2>/dev/null | head -1)
+          # Find the .app in DerivedData (built before export step)
+          APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -path "*/release-iphoneos/*.app" 2>/dev/null | grep -v "\.xctest" | head -1)
+
           if [ -z "$APP_PATH" ]; then
-            APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -path "*/release-iphoneos/*.app" 2>/dev/null | grep -v ".xctest" | head -1)
+            echo "ERROR: could not find .app bundle"
+            find ~/Library/Developer/Xcode/DerivedData -name "*.app" 2>/dev/null || true
+            exit 1
           fi
 
           echo "Found app at: $APP_PATH"
@@ -49,8 +52,8 @@ workflows:
           cp -r "$APP_PATH" /tmp/Payload/
           cd /tmp
           zip -r YukiXHentai.ipa Payload
-          mkdir -p $CM_BUILD_DIR/output
-          cp YukiXHentai.ipa $CM_BUILD_DIR/output/
+          mkdir -p "$CM_BUILD_DIR/output"
+          cp YukiXHentai.ipa "$CM_BUILD_DIR/output/"
           echo "IPA created at $CM_BUILD_DIR/output/YukiXHentai.ipa"
 
     artifacts:
