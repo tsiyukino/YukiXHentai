@@ -22,7 +22,7 @@ workflows:
           cargo install tauri-cli --version "^2" --locked
 
       - name: Install Node deps
-        script: npm install
+        script: npm install --force
 
       - name: Install CocoaPods deps
         script: |
