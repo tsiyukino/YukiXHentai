@@ -34,8 +34,11 @@ jobs:
         with:
           node-version: 22
 
+      - name: Debug lockfile
+        run: node -e "const p=require('./package-lock.json'); const bad=Object.entries(p.packages||{}).filter(([k,v])=>v.os&&!v.optional); console.log('Non-optional OS entries:', JSON.stringify(bad.map(([k,v])=>({k,os:v.os,optional:v.optional})),null,2))"
+
       - name: Install frontend deps
-        run: npm install
+        run: npm install || cat /Users/runner/.npm/_logs/*.log
 
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2" --locked
