@@ -46,7 +46,7 @@ NOT a scraper or bulk downloader — it's a full client application.
 4. Reader (image viewer, page/scroll modes, read progress, image caching)
 5. Organization (collections, custom tags, notes, batch ops, saved filters)
 6. Advanced (duplicate detection w/ img_hash, statistics, download queue UI)
-7. Mobile (touch UI, Android/iOS via Tauri 2 mobile)
+7. Mobile (touch UI, Android/iOS via Tauri 2 mobile) — iOS compatibility layer done (path init, UA, cache cleanup, file picker UI gates); Xcode project scaffolding (`tauri ios init`) still required on macOS
 
 ## Key Crates
 tokio, reqwest, scraper, image, rusqlite, serde/serde_json, toml, tracing/tracing-subscriber, thiserror, anyhow

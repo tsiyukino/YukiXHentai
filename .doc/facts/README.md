@@ -9,3 +9,4 @@ Files in this directory document third-party API behavior and external facts. Th
 | `exhentai-search.md` | Search URL parameters |
 | `exhentai-advanced-search.md` | Advanced search options |
 | `exhentai-favorites.md` | Favorites endpoints, form fields, HTML parsing |
+| `tauri-ios.md` | Tauri 2 iOS build requirements, paths, plugins, CI |

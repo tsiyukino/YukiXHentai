@@ -40,6 +40,16 @@ pub fn run() {
         .join("yukixhentai")
         .join("cache");
 
+    // iOS: all paths must exist inside the app sandbox before use.
+    // The dirs crate applies macOS conventions on iOS (Library/Application Support, Library/Caches)
+    // but does not create the directories — we must do so explicitly.
+    #[cfg(target_os = "ios")]
+    {
+        let _ = std::fs::create_dir_all(&config_dir);
+        let _ = std::fs::create_dir_all(&data_dir);
+        let _ = std::fs::create_dir_all(&cache_dir);
+    }
+
     let config_state = ConfigState::load(config_dir.clone());
 
     // Build HTTP clients using stored cookies (if already logged in from a previous session).
@@ -239,6 +249,9 @@ pub fn run() {
                     tracing::warn!("Failed to clear yukixhentai.db on exit: {}", e);
                 }
                 // Clear cache directory contents (but not the directory itself).
+                // On iOS, cache eviction is managed by the OS — we skip aggressive
+                // cleanup on exit to avoid conflicts with backgrounding lifecycle.
+                #[cfg(not(target_os = "ios"))]
                 if cache_dir.exists() {
                     if let Ok(entries) = std::fs::read_dir(&cache_dir) {
                         for entry in entries.flatten() {

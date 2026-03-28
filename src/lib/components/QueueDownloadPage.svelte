@@ -9,6 +9,7 @@
     type ResolvedGallery,
     type SubmitEntry,
   } from "$lib/api/library";
+  import { isIos } from "$lib/stores/ui";
 
   interface Props {
     onClose: () => void;
@@ -201,18 +202,20 @@
   </div>
 
   <div class="overlay-body">
-    <!-- Tabs -->
+    <!-- Tabs — JSON tab hidden on iOS (file picker unsupported) -->
     <div class="tab-row">
       <button class="tab-btn" class:active={activeTab === "manual"} onclick={() => { activeTab = "manual"; }}>
         {$t("queue.manual_tab")}
       </button>
-      <button class="tab-btn" class:active={activeTab === "json"} onclick={() => { activeTab = "json"; }}>
-        {$t("queue.json_tab")}
-      </button>
+      {#if !$isIos}
+        <button class="tab-btn" class:active={activeTab === "json"} onclick={() => { activeTab = "json"; }}>
+          {$t("queue.json_tab")}
+        </button>
+      {/if}
     </div>
 
     <!-- Input area -->
-    {#if activeTab === "manual"}
+    {#if activeTab === "manual" || $isIos}
       <div class="input-area">
         <textarea
           class="manual-textarea"

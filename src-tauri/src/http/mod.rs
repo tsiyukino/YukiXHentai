@@ -183,9 +183,14 @@ pub fn build_client(cookies: &ExhCookies) -> Result<Client, String> {
         &url,
     );
 
+    #[cfg(not(target_os = "ios"))]
+    let ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+    #[cfg(target_os = "ios")]
+    let ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
+
     Client::builder()
         .cookie_provider(jar)
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        .user_agent(ua)
         .build()
         .map_err(|e| e.to_string())
 }

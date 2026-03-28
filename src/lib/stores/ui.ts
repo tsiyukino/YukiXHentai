@@ -1,4 +1,4 @@
-import { writable } from "svelte/store";
+import { readable, writable } from "svelte/store";
 
 export type ViewMode = "cards" | "list";
 
@@ -17,3 +17,13 @@ export const theme = writable<Theme>("light");
 
 /** Incremented when the local library needs a full refresh (after delete or download complete). */
 export const libraryRefreshTick = writable<number>(0);
+
+/**
+ * True when running on iOS (WKWebView). Used to hide desktop-only features
+ * (file pickers, custom library/cache paths) that are unsupported on iOS.
+ * Detection via WKWebView's native User-Agent which always contains "iPhone" or "iPad".
+ */
+export const isIos = readable<boolean>(
+  typeof navigator !== "undefined" &&
+    /iPhone|iPad|iPod/.test(navigator.userAgent)
+);

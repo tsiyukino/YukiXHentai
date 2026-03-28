@@ -5,6 +5,7 @@ Config file: `{platform_config_dir}/yukixhentai/config.toml`
 - Windows: `%APPDATA%/yukixhentai/config.toml`
 - Linux: `~/.config/yukixhentai/config.toml`
 - macOS: `~/Library/Application Support/yukixhentai/config.toml`
+- iOS: `<app-sandbox>/Library/Application Support/yukixhentai/config.toml` (dirs crate applies macOS convention; directory is created by lib.rs on startup)
 
 ## [auth] section
 
@@ -55,6 +56,7 @@ Config file: `{platform_config_dir}/yukixhentai/config.toml`
 - **Used by:** `commands/get_cache_dir`, `commands/set_cache_dir`
 - **Notes:** Custom cache directory for thumbnails, page thumbnails, and originals. None = platform default. Requires restart to take effect (caches are initialized at startup). Set via `set_cache_dir` IPC.
 - **Windows note:** On Windows `dirs::cache_dir() == dirs::data_local_dir()`, so the extra `/cache/` suffix ensures cache files (`thumbs/`, `page-thumbs/`, `originals/`) never share a directory with permanent data (`library/`). Clearing the cache can never delete library files.
+- **iOS note:** Custom path is ignored — iOS sandbox restricts all writes to the app container. Default resolves to `<app-sandbox>/Library/Caches/yukixhentai/cache/`. Cache is NOT cleared on exit (OS manages cache eviction).
 
 ### storage.read_cache_max_mb
 - **Type:** `u64`
@@ -68,6 +70,7 @@ Config file: `{platform_config_dir}/yukixhentai/config.toml`
 - **Default:** `None` (uses `{data_local_dir}/yukixhentai/library/`)
 - **Used by:** `library::library_dir`, `commands/confirm_import_local_folder`, `commands/get_library_dir`, `commands/set_library_dir`, `download::local_queue` worker
 - **Notes:** Root directory for locally-imported galleries. Each gallery gets a subfolder `{gid}_{sanitized_title}/`. None = default location. Set via `set_library_dir` IPC.
+- **iOS note:** Custom path not supported — iOS sandbox prevents access to arbitrary filesystem paths. Default resolves to `<app-sandbox>/Library/Application Support/yukixhentai/library/`.
 
 ## [history] section
 

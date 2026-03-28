@@ -13,6 +13,7 @@
     type LocalPage,
   } from "$lib/api/library";
   import { thumbSrc } from "$lib/utils/thumb";
+  import { isIos } from "$lib/stores/ui";
   import type { Gallery, Tag } from "$lib/api/galleries";
 
   const EH_CATEGORIES = [
@@ -275,7 +276,9 @@
             <div class="cover-placeholder"></div>
           {/if}
         </div>
-        <button class="btn-outline" onclick={handleChangeCover}>{$t("local.change_cover")}</button>
+        {#if !$isIos}
+          <button class="btn-outline" onclick={handleChangeCover}>{$t("local.change_cover")}</button>
+        {/if}
       </div>
     </section>
 
@@ -363,7 +366,9 @@
     <section class="section">
       <div class="pages-header">
         <h3 class="section-title">Pages ({pages.length})</h3>
-        <button class="btn-outline" onclick={handleInsertPages}>{$t("local.insert_pages")}</button>
+        {#if !$isIos}
+          <button class="btn-outline" onclick={handleInsertPages}>{$t("local.insert_pages")}</button>
+        {/if}
       </div>
 
       {#if pagesLoading}
