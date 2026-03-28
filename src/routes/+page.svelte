@@ -199,13 +199,16 @@
     --success-bg: rgba(34, 197, 94, 0.1);
   }
 
-  :global(html),
-  :global(body) {
+  :global(html) {
     height: 100%;
+    height: -webkit-fill-available;
     overflow: hidden;
   }
 
   :global(body) {
+    min-height: 100%;
+    min-height: -webkit-fill-available;
+    overflow: hidden;
     margin: 0;
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     font-size: 14px;
@@ -260,9 +263,11 @@
     /* No min-width — must work on narrow phone screens */
     min-height: 400px;
     overflow: hidden;
-    /* iOS safe areas — top handled per-component, bottom by BottomTabBar */
+    /* iOS safe areas — top/bottom handled per-component */
     padding-left: env(safe-area-inset-left);
     padding-right: env(safe-area-inset-right);
+    /* iOS WKWebView: use fill-available to truly fill the webview frame */
+    height: -webkit-fill-available;
   }
 
   /* Desktop/tablet keep a sensible minimum */
