@@ -21,7 +21,11 @@
     "connected": "接続済み",
     "fields_required": "3つのCookieフィールドはすべて必須です。",
     "login_browser": "ブラウザでログイン",
-    "manual_cookie": "Cookie手動入力"
+    "manual_cookie": "Cookie手動入力",
+    "credentials_title": "サインイン",
+    "credentials_hint": "ブラウザウィンドウでE-Hentaiにログインします。サインイン後、Cookieは自動で取得されます。",
+    "use_manual_cookies": "Cookie手動入力に切り替える",
+    "use_credentials": "ブラウザでサインインに切り替える"
   },
   "gallery": {
     "count": "{count} 件のギャラリー",
@@ -118,6 +122,8 @@
     "card_size": "カード/リストサイズ",
     "detail_preview_size": "詳細プレビューサイズ",
     "layout_preset": "レイアウトプリセット",
+    "layout_preset_hint": "異なるデバイスサイズでのUIをプレビューします。",
+    "layout_auto": "自動検出に戻す",
     "desktop": "デスクトップ",
     "tablet": "タブレット",
     "phone": "スマートフォン",

@@ -16,7 +16,7 @@
   } from "$lib/stores/galleries";
   import type { HomeFilterState, SortField } from "$lib/stores/galleries";
   import { detailGallery, detailOpenedAsLocal } from "$lib/stores/detail";
-  import { viewMode, cardSize } from "$lib/stores/ui";
+  import { viewMode, cardSize, deviceClass } from "$lib/stores/ui";
   import GalleryCard from "./GalleryCard.svelte";
   import GalleryListItem from "./GalleryListItem.svelte";
   import FilterPanel from "./FilterPanel.svelte";
@@ -622,7 +622,7 @@
   <div class="filter-overlay" onclick={() => filterOpen = false} role="presentation"></div>
 {/if}
 
-<div class="filter-sidebar" class:open={filterOpen}>
+<div class="filter-sidebar" class:open={filterOpen} class:bottom-sheet={$deviceClass === "phone"}>
   <div class="sidebar-header">
     <h3>{$t("filters.title")}</h3>
     <button class="close-btn" onclick={() => filterOpen = false}>
@@ -1101,6 +1101,26 @@
 
   .filter-sidebar.open {
     transform: translateX(0);
+  }
+
+  /* Phone: filter panel as bottom sheet */
+  .filter-sidebar.bottom-sheet {
+    top: auto;
+    right: 0;
+    left: 0;
+    bottom: 0;
+    width: 100%;
+    max-width: 100%;
+    height: 85dvh;
+    border-left: none;
+    border-top: 1px solid var(--border-strong);
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    box-shadow: 0 -4px 24px var(--overlay-bg);
+    transform: translateY(100%);
+  }
+
+  .filter-sidebar.bottom-sheet.open {
+    transform: translateY(0);
   }
 
   .sidebar-header {

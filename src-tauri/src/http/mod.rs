@@ -195,6 +195,156 @@ pub fn build_client(cookies: &ExhCookies) -> Result<Client, String> {
         .map_err(|e| e.to_string())
 }
 
+/// Perform a username/password login on E-Hentai forums, then extract the
+/// resulting cookies and request `igneous` from exhentai.org.
+///
+/// NOTE: forums.e-hentai.org is behind Cloudflare and returns 403 to plain
+/// HTTP clients. This function is kept for reference but is NOT called at
+/// runtime. Login is handled via open_login_window (WebviewWindow) instead.
+#[allow(dead_code)]
+pub async fn login_with_credentials(username: &str, password: &str) -> Result<ExhCookies, String> {
+    let ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
+    // Build a plain client with NO automatic cookie store.
+    // We manage cookies manually via explicit Cookie/Set-Cookie headers,
+    // matching JHenTai's interceptor approach.
+    let client = Client::builder()
+        .user_agent(ua)
+        .redirect(reqwest::redirect::Policy::none()) // don't auto-follow; we need the Set-Cookie on the 302
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    // Step 1: POST login.
+    // JHenTai always sends nw=1 and datatags=1 on every request via its cookie interceptor.
+    let login_url = "https://forums.e-hentai.org/index.php";
+    let params = [
+        ("CookieDate", "365"),
+        ("b", ""),
+        ("bt", ""),
+        ("referer", "https://forums.e-hentai.org/index.php?"),
+        ("UserName", username),
+        ("PassWord", password),
+    ];
+
+    tracing::info!("[login_with_credentials] POSTing to {}", login_url);
+
+    let resp = client
+        .post(login_url)
+        .query(&[("act", "Login"), ("CODE", "01")])
+        .header("Referer", "https://forums.e-hentai.org/index.php?act=Login&CODE=00")
+        .header("Cookie", "nw=1; datatags=1")
+        .form(&params)
+        .send()
+        .await
+        .map_err(|e| format!("Network error during login: {}", e))?;
+
+    let status = resp.status();
+    tracing::info!("[login_with_credentials] login response status: {}", status);
+
+    // Log all Set-Cookie headers from the response.
+    let set_cookie_values: Vec<String> = resp
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|v| v.to_str().ok().map(|s| s.to_string()))
+        .collect();
+    tracing::info!("[login_with_credentials] Set-Cookie headers ({} total):", set_cookie_values.len());
+    for sc in &set_cookie_values {
+        tracing::info!("  Set-Cookie: {}", sc);
+    }
+
+    // 200 or 302 both indicate the POST was accepted; anything else is an error.
+    if !status.is_success() && status.as_u16() != 302 {
+        return Err(format!("Login request failed with status {}", status));
+    }
+
+    // Step 2: Extract ipb_member_id and ipb_pass_hash from Set-Cookie headers.
+    let mut ipb_member_id = String::new();
+    let mut ipb_pass_hash = String::new();
+
+    for sc in &set_cookie_values {
+        // Each Set-Cookie value looks like: "name=value; Path=/; Domain=..."
+        if let Some(pair) = sc.split(';').next() {
+            let pair = pair.trim();
+            if let Some(val) = pair.strip_prefix("ipb_member_id=") {
+                ipb_member_id = val.to_string();
+            } else if let Some(val) = pair.strip_prefix("ipb_pass_hash=") {
+                ipb_pass_hash = val.to_string();
+            }
+        }
+    }
+
+    tracing::info!(
+        "[login_with_credentials] extracted ipb_member_id='{}' ipb_pass_hash='{}'",
+        if ipb_member_id.is_empty() { "<empty>" } else { "<set>" },
+        if ipb_pass_hash.is_empty() { "<empty>" } else { "<set>" },
+    );
+
+    if ipb_member_id.is_empty() || ipb_pass_hash.is_empty() {
+        return Err("Login failed — incorrect username or password.".into());
+    }
+
+    // Step 3: GET exhentai.org to obtain igneous.
+    // Send ipb_member_id + ipb_pass_hash + nw=1 + datatags=1 explicitly.
+    let exh_cookie_header = format!(
+        "nw=1; datatags=1; ipb_member_id={}; ipb_pass_hash={}",
+        ipb_member_id, ipb_pass_hash
+    );
+
+    tracing::info!("[login_with_credentials] GETting {} for igneous", EXH_BASE);
+
+    let exh_resp = client
+        .get(EXH_BASE)
+        .header("Cookie", &exh_cookie_header)
+        .send()
+        .await
+        .map_err(|e| format!("Network error fetching igneous: {}", e))?;
+
+    let exh_status = exh_resp.status();
+    tracing::info!("[login_with_credentials] exhentai response status: {}", exh_status);
+
+    let exh_set_cookies: Vec<String> = exh_resp
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|v| v.to_str().ok().map(|s| s.to_string()))
+        .collect();
+    tracing::info!("[login_with_credentials] exhentai Set-Cookie headers ({}):", exh_set_cookies.len());
+    for sc in &exh_set_cookies {
+        tracing::info!("  Set-Cookie: {}", sc);
+    }
+
+    // Step 4: Extract igneous.
+    let mut igneous = String::new();
+    for sc in &exh_set_cookies {
+        if let Some(pair) = sc.split(';').next() {
+            let pair = pair.trim();
+            if let Some(val) = pair.strip_prefix("igneous=") {
+                tracing::info!("[login_with_credentials] igneous value: '{}'", val);
+                if val != "mystery" {
+                    igneous = val.to_string();
+                }
+            }
+        }
+    }
+
+    if igneous.is_empty() {
+        return Err(
+            "Authenticated to E-Hentai but could not obtain ExHentai access (igneous missing or \
+             'mystery'). Your account may not have ExHentai access enabled."
+                .into(),
+        );
+    }
+
+    tracing::info!("[login_with_credentials] login successful");
+
+    Ok(ExhCookies {
+        ipb_member_id,
+        ipb_pass_hash,
+        igneous,
+    })
+}
+
 /// Validate cookies by making a test request to exhentai.org.
 pub async fn validate_cookies(cookies: &ExhCookies) -> Result<(), String> {
     let client = build_client(cookies)?;

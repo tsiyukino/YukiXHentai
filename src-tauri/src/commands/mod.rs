@@ -149,6 +149,154 @@ pub async fn login(
     }
 }
 
+/// Open a WebviewWindow navigated to the E-Hentai login page.
+/// The webview handles Cloudflare challenges natively.
+/// After the user logs in, injected JS encodes document.cookie into a
+/// redirect URL; on_navigation intercepts it, extracts the cookies, emits
+/// a `webview-login-cookies` Tauri event to the main window, and closes
+/// the login webview.
+///
+/// The frontend listens for `webview-login-cookies` and calls `login` with
+/// the received cookie values.
+#[tauri::command]
+pub async fn open_login_window(app: AppHandle) -> Result<(), String> {
+    #[cfg(desktop)]
+    {
+        tracing::info!("[open_login_window] command invoked");
+        use tauri::{utils::config::WebviewUrl, webview::WebviewWindowBuilder, Emitter, Manager};
+        use url::Url;
+
+        const COOKIE_PARAM: &str = "__exh_cookies__";
+        const LOGIN_URL: &str = "https://forums.e-hentai.org/index.php?act=Login&CODE=00";
+
+        if let Some(w) = app.get_webview_window("exh-login") {
+            let _ = w.close();
+        }
+
+        let app_for_event = app.clone();
+
+        let win = WebviewWindowBuilder::new(
+            &app,
+            "exh-login",
+            WebviewUrl::External("about:blank".parse::<Url>().expect("valid URL")),
+        )
+        .title("E-Hentai Login")
+        .inner_size(900.0, 700.0)
+        .resizable(true)
+        .on_navigation(move |url: &Url| {
+            tracing::info!("[open_login_window] on_navigation: {}", url);
+            let query = url.query().unwrap_or("");
+            if !query.contains(COOKIE_PARAM) {
+                return true;
+            }
+
+            let cookie_str = url
+                .query_pairs()
+                .find(|(k, _)| k == COOKIE_PARAM)
+                .map(|(_, v)| v.into_owned())
+                .unwrap_or_default();
+
+            tracing::info!("[open_login_window] received cookies: {} chars", cookie_str.len());
+
+            let mut ipb_member_id = String::new();
+            let mut ipb_pass_hash = String::new();
+            let mut igneous = String::new();
+
+            for part in cookie_str.split(';') {
+                let part = part.trim();
+                if let Some(v) = part.strip_prefix("ipb_member_id=") {
+                    ipb_member_id = v.to_string();
+                } else if let Some(v) = part.strip_prefix("ipb_pass_hash=") {
+                    ipb_pass_hash = v.to_string();
+                } else if let Some(v) = part.strip_prefix("igneous=") {
+                    if v != "mystery" && v != "deleted" {
+                        igneous = v.to_string();
+                    }
+                }
+            }
+
+            tracing::info!(
+                "[open_login_window] parsed: member_id={} pass_hash={} igneous={}",
+                if ipb_member_id.is_empty() { "<empty>" } else { "<set>" },
+                if ipb_pass_hash.is_empty() { "<empty>" } else { "<set>" },
+                if igneous.is_empty() { "<empty>" } else { "<set>" },
+            );
+
+            let _ = app_for_event.emit("webview-login-cookies", serde_json::json!({
+                "ipb_member_id": ipb_member_id,
+                "ipb_pass_hash": ipb_pass_hash,
+                "igneous": igneous,
+            }));
+
+            if let Some(w) = app_for_event.get_webview_window("exh-login") {
+                let _ = w.close();
+            }
+
+            false
+        })
+        .on_page_load(|webview, payload| {
+            use tauri::webview::PageLoadEvent;
+            if payload.event() != PageLoadEvent::Finished {
+                return;
+            }
+            let url = payload.url().to_string();
+            tracing::info!("[open_login_window] page loaded: {}", url);
+            if url.starts_with("https://forums.e-hentai.org/") && !url.contains("__exh_cookies__") {
+                let js = r#"
+                    (function() {
+                        var c = encodeURIComponent(document.cookie);
+                        if (c.indexOf('ipb_member_id') !== -1 && c.indexOf('ipb_pass_hash') !== -1) {
+                            window.location.href = 'https://forums.e-hentai.org/?__exh_cookies__=' + c;
+                        }
+                    })();
+                "#;
+                let _ = webview.eval(js);
+            }
+        })
+        .build()
+        .map_err(|e| e.to_string())?;
+
+        tracing::info!("[open_login_window] window built, navigating");
+        let login_url: Url = LOGIN_URL.parse().expect("valid URL");
+        win.navigate(login_url).map_err(|e| e.to_string())?;
+        tracing::info!("[open_login_window] navigate called");
+
+        Ok(())
+    }
+    #[cfg(not(desktop))]
+    {
+        // On mobile there are no secondary windows — navigate the main webview to
+        // the E-Hentai login page instead. The main webview's on_page_load hook
+        // (registered in lib.rs setup) handles cookie extraction and navigation back.
+        use tauri::Manager;
+        use url::Url;
+        const LOGIN_URL: &str = "https://forums.e-hentai.org/index.php?act=Login&CODE=00";
+        let webview = app.get_webview_window("main")
+            .ok_or_else(|| "main window not found".to_string())?;
+        let login_url: Url = LOGIN_URL.parse().expect("valid URL");
+        webview.navigate(login_url).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+}
+
+/// Cancel an in-progress mobile login by navigating the main webview back to the app.
+/// On desktop this is a no-op (login uses a separate window, not the main webview).
+#[tauri::command]
+pub fn cancel_mobile_login(app: AppHandle) -> Result<(), String> {
+    #[cfg(not(desktop))]
+    {
+        use tauri::Manager;
+        use url::Url;
+        let webview = app.get_webview_window("main")
+            .ok_or_else(|| "main window not found".to_string())?;
+        let app_url: Url = "tauri://localhost".parse().expect("valid URL");
+        webview.navigate(app_url).map_err(|e| e.to_string())?;
+    }
+    #[cfg(desktop)]
+    let _ = app;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn logout(
     config_state: State<'_, ConfigState>,

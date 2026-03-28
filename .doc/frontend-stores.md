@@ -1,5 +1,5 @@
 # Frontend Stores
-> Last updated: 2026-03-25 (localLibrary stores added; detailOpenedAsLocal added) | Affects: src/lib/stores/
+> Last updated: 2026-03-28 (deviceClass, sidebarDrawerOpen added) | Affects: src/lib/stores/
 
 ## Local library stores (stores/localLibrary.ts)
 
@@ -139,6 +139,19 @@
 - **Notes:** Shared batch-loading state. `fetchedDetailPages` and `pageEntries` are the SAME object references as the detail's local variables — mutated in-place by both sides. Scalar fields (`pagesPerBatch`, `showkey`, `totalPageCount`) updated via `detailBatchState.set({...bs, ...})`. `totalPageCount` is set once from the first batch HTML parse — never recalculated from loaded entries. **`totalPageCount` is write-authoritative only in `GalleryDetail.fetchBatch` — `GalleryReader.fetchStripBatch` must never write it.** Used to detect same-gallery re-open (gid match) and restore `totalPageCount` without re-fetching. NOT wiped when detail closes due to reader opening; wiped when both close (no reader open). Reset on new gallery open.
 
 ## UI stores (stores/ui.ts)
+
+### deviceClass
+- **Shape:** `Readable<DeviceClass>`
+- **Type:** `"phone" | "tablet" | "desktop"`
+- **Default:** derived from `window.innerWidth` at init time
+- **Used by:** `+page.svelte`, `Sidebar.svelte`, `GalleryDetail.svelte`, `GalleryGrid.svelte`
+- **Notes:** Updated on every `window.resize` event. `phone < 600`, `tablet 600–1023`, `desktop ≥ 1024`. Read-only (no setter). Components use this to switch layout mode. SSR-safe (defaults to `"desktop"` if `window` is undefined).
+
+### sidebarDrawerOpen
+- **Shape:** `Writable<boolean>`
+- **Default:** `false`
+- **Used by:** `Sidebar.svelte` (reader), `BottomTabBar.svelte` (writer: opens on hamburger tap), `Sidebar.svelte` (writer: closes on navigate or close-button)
+- **Notes:** Controls phone sidebar drawer visibility. Only meaningful when `deviceClass === "phone"`. Has no effect in tablet/desktop layout.
 
 ### viewMode
 - **Shape:** `Writable<"cards" | "list">`

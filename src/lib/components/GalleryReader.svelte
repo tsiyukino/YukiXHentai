@@ -474,6 +474,31 @@
     }
   }
 
+  // Touch swipe state for page navigation (page mode only)
+  let touchStartX = 0;
+  let touchStartY = 0;
+  const SWIPE_MIN_DISTANCE = 50;
+  const SWIPE_MAX_VERTICAL = 80; // ignore if too vertical
+
+  function handleTouchStart(e: TouchEvent) {
+    if (mode !== "page") return;
+    touchStartX = e.touches[0].clientX;
+    touchStartY = e.touches[0].clientY;
+  }
+
+  function handleTouchEnd(e: TouchEvent) {
+    if (mode !== "page" || !gallery) return;
+    const dx = e.changedTouches[0].clientX - touchStartX;
+    const dy = e.changedTouches[0].clientY - touchStartY;
+    if (Math.abs(dy) > SWIPE_MAX_VERTICAL) return; // too vertical
+    if (Math.abs(dx) < SWIPE_MIN_DISTANCE) return;  // too short
+    if (dx < 0) {
+      goToPage(currentPage + 1); // swipe left → next page
+    } else {
+      goToPage(currentPage - 1); // swipe right → prev page
+    }
+  }
+
   function handleStripWheel(e: WheelEvent) {
     e.preventDefault();
     (e.currentTarget as HTMLElement).scrollLeft += e.deltaY;
@@ -692,7 +717,14 @@
     {/if}
 
     {#if mode === "page"}
-      <div class="page-view" onclick={handlePageViewClick} role="button" tabindex="-1">
+      <div
+        class="page-view"
+        onclick={handlePageViewClick}
+        ontouchstart={handleTouchStart}
+        ontouchend={handleTouchEnd}
+        role="button"
+        tabindex="-1"
+      >
         {#if currentPage in loadedImages}
           <img
             src={loadedImages[currentPage]}
@@ -895,6 +927,8 @@
     align-items: center;
     justify-content: center;
     overflow: hidden;
+    /* Allow vertical pan while capturing horizontal swipe for page nav */
+    touch-action: pan-y;
     cursor: pointer;
     user-select: none;
   }

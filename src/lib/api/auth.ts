@@ -5,6 +5,14 @@ export interface LoginResult {
   message: string;
 }
 
+export async function openLoginWindow(): Promise<void> {
+  return invoke("open_login_window");
+}
+
+export async function cancelMobileLogin(): Promise<void> {
+  return invoke("cancel_mobile_login");
+}
+
 export async function login(
   ipb_member_id: string,
   ipb_pass_hash: string,

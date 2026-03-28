@@ -161,10 +161,83 @@ pub fn run() {
                 config_snapshot,
             );
             app.manage(local_queue);
+
+            // Mobile login: register on_page_load on the main webview to intercept
+            // the sentinel cookie redirect after E-Hentai login.
+            #[cfg(not(desktop))]
+            {
+                use tauri::{webview::PageLoadEvent, Emitter, Manager};
+                let app_handle = app.handle().clone();
+                if let Some(webview) = app.get_webview_window("main") {
+                    webview.on_page_load(move |_webview, payload| {
+                        if payload.event() != PageLoadEvent::Finished {
+                            return;
+                        }
+                        let url = payload.url().to_string();
+
+                        const COOKIE_PARAM: &str = "__exh_cookies__";
+
+                        // Inject JS after login pages to extract cookies via sentinel redirect.
+                        if url.starts_with("https://forums.e-hentai.org/")
+                            && !url.contains(COOKIE_PARAM)
+                        {
+                            let js = r#"
+                                (function() {
+                                    var c = encodeURIComponent(document.cookie);
+                                    if (c.indexOf('ipb_member_id') !== -1 && c.indexOf('ipb_pass_hash') !== -1) {
+                                        window.location.href = 'https://forums.e-hentai.org/?__exh_cookies__=' + c;
+                                    }
+                                })();
+                            "#;
+                            let _ = _webview.eval(js);
+                            return;
+                        }
+
+                        // Intercept the sentinel URL.
+                        if url.contains(COOKIE_PARAM) {
+                            if let Ok(parsed) = url::Url::parse(&url) {
+                                let cookie_str = parsed
+                                    .query_pairs()
+                                    .find(|(k, _)| k == COOKIE_PARAM)
+                                    .map(|(_, v)| v.into_owned())
+                                    .unwrap_or_default();
+
+                                let mut ipb_member_id = String::new();
+                                let mut ipb_pass_hash = String::new();
+                                let mut igneous = String::new();
+
+                                for part in cookie_str.split(';') {
+                                    let part = part.trim();
+                                    if let Some(v) = part.strip_prefix("ipb_member_id=") {
+                                        ipb_member_id = v.to_string();
+                                    } else if let Some(v) = part.strip_prefix("ipb_pass_hash=") {
+                                        ipb_pass_hash = v.to_string();
+                                    } else if let Some(v) = part.strip_prefix("igneous=") {
+                                        if v != "mystery" && v != "deleted" {
+                                            igneous = v.to_string();
+                                        }
+                                    }
+                                }
+
+                                let _ = app_handle.emit("webview-login-cookies", serde_json::json!({
+                                    "ipb_member_id": ipb_member_id,
+                                    "ipb_pass_hash": ipb_pass_hash,
+                                    "igneous": igneous,
+                                }));
+
+                                // Navigate back to the app.
+                                let _ = _webview.navigate("tauri://localhost".parse().unwrap());
+                            }
+                        }
+                    });
+                }
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::login,
+            commands::open_login_window,
             commands::logout,
             commands::get_auth_status,
             commands::sync_gallery_page,
@@ -235,6 +308,7 @@ pub fn run() {
             commands::cancel_download_queue,
             commands::delete_local_gallery,
             commands::sync_local_gallery,
+            commands::cancel_mobile_login,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

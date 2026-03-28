@@ -6,12 +6,14 @@
   import { isLoggedIn } from "$lib/stores/auth";
   import { currentPage } from "$lib/stores/navigation";
   import { readerGallery } from "$lib/stores/reader";
-  import { theme, detailExpanded } from "$lib/stores/ui";
+  import { theme, detailExpanded, deviceClass } from "$lib/stores/ui";
   import type { Theme } from "$lib/stores/ui";
   import { detailGallery } from "$lib/stores/detail";
   import LoginForm from "$lib/components/LoginForm.svelte";
   import Sidebar from "$lib/components/Sidebar.svelte";
   import WindowControls from "$lib/components/WindowControls.svelte";
+  import BottomTabBar from "$lib/components/BottomTabBar.svelte";
+  import MobileTopBar from "$lib/components/MobileTopBar.svelte";
   import GalleryGrid from "$lib/components/GalleryGrid.svelte";
   import GalleryReader from "$lib/components/GalleryReader.svelte";
   import GalleryDetail from "$lib/components/GalleryDetail.svelte";
@@ -48,10 +50,13 @@
   });
 </script>
 
-<div class="app">
-  <div class="titlebar">
-    <WindowControls />
-  </div>
+<div class="app" class:phone={$deviceClass === "phone"} class:tablet={$deviceClass === "tablet"}>
+  <!-- Desktop/Tablet: custom titlebar with window controls -->
+  {#if $deviceClass !== "phone"}
+    <div class="titlebar">
+      <WindowControls />
+    </div>
+  {/if}
 
   {#if !ready}
     <div class="loading-screen">
@@ -61,10 +66,12 @@
   {:else if !$isLoggedIn}
     <LoginForm />
   {:else}
-    <div class="app-body">
+    <!-- Phone layout: top bar + content + bottom tab bar -->
+    {#if $deviceClass === "phone"}
+      <MobileTopBar />
+      <!-- Sidebar renders as overlay drawer; it's always in the DOM but off-screen -->
       <Sidebar />
-      <main>
-        <!-- Page content: hidden (display:none) when detail is in full-page mode -->
+      <main class="phone-main">
         <div class="page-content" class:hidden={$detailExpanded && !!$detailGallery}>
           {#if $currentPage === "home"}
             <GalleryGrid />
@@ -84,10 +91,37 @@
             <SettingsPage />
           {/if}
         </div>
-        <!-- Detail panel: always rendered once inside main; fullPage switches between fixed-overlay and inline modes -->
         <GalleryDetail fullPage={$detailExpanded && !!$detailGallery} />
       </main>
-    </div>
+      <BottomTabBar />
+    {:else}
+      <!-- Desktop/Tablet layout: sidebar + main -->
+      <div class="app-body">
+        <Sidebar />
+        <main>
+          <div class="page-content" class:hidden={$detailExpanded && !!$detailGallery}>
+            {#if $currentPage === "home"}
+              <GalleryGrid />
+            {:else if $currentPage === "search"}
+              <SearchPage />
+            {:else if $currentPage === "popular"}
+              <PlaceholderPage titleKey="popular_page.title" messageKey="popular_page.coming_soon" icon="popular" />
+            {:else if $currentPage === "favorites"}
+              <FavoritesPage />
+            {:else if $currentPage === "watched"}
+              <PlaceholderPage titleKey="watched_page.title" messageKey="watched_page.coming_soon" icon="watched" />
+            {:else if $currentPage === "history"}
+              <HistoryPage />
+            {:else if $currentPage === "downloads"}
+              <LocalPage />
+            {:else if $currentPage === "settings"}
+              <SettingsPage />
+            {/if}
+          </div>
+          <GalleryDetail fullPage={$detailExpanded && !!$detailGallery} />
+        </main>
+      </div>
+    {/if}
   {/if}
 </div>
 
@@ -197,13 +231,33 @@
     background: var(--scrollbar-thumb-hover);
   }
 
+  /* Phone: enforce minimum touch targets on all interactive elements */
+  @media (max-width: 599px) {
+    :global(button:not(.thumb-item):not(.preset-btn):not(.scope-tab)) {
+      min-height: 44px;
+    }
+    :global(input[type="text"], input[type="number"], input[type="password"]) {
+      min-height: 44px;
+      font-size: 16px; /* prevents iOS zoom on focus */
+    }
+    :global(select) {
+      min-height: 44px;
+      font-size: 16px;
+    }
+  }
+
   .app {
     display: flex;
     flex-direction: column;
     height: 100vh;
-    min-width: 640px;
+    /* No min-width — must work on narrow phone screens */
     min-height: 400px;
     overflow: hidden;
+  }
+
+  /* Desktop/tablet keep a sensible minimum */
+  .app:not(.phone) {
+    min-width: 400px;
   }
 
   .titlebar {
@@ -225,6 +279,16 @@
   }
 
   main {
+    flex: 1;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    background: var(--bg-secondary);
+  }
+
+  /* Phone: main fills between top bar and bottom tab bar */
+  .phone-main {
     flex: 1;
     overflow: hidden;
     display: flex;

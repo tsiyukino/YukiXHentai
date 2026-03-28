@@ -2,7 +2,7 @@
   import { t } from "$lib/i18n";
   import { currentPage, sidebarCollapsed } from "$lib/stores/navigation";
   import type { NavPage } from "$lib/stores/navigation";
-  import { theme } from "$lib/stores/ui";
+  import { theme, deviceClass, sidebarDrawerOpen } from "$lib/stores/ui";
   import type { Theme } from "$lib/stores/ui";
   import { setTheme } from "$lib/api/reader";
   import { searchQuery, searchResults } from "$lib/stores/search";
@@ -31,10 +31,18 @@
 
   function navigate(page: NavPage) {
     $currentPage = page;
+    // On phone, close the drawer after navigating
+    if ($deviceClass === "phone") {
+      $sidebarDrawerOpen = false;
+    }
   }
 
   function toggleCollapse() {
     $sidebarCollapsed = !$sidebarCollapsed;
+  }
+
+  function closeDrawer() {
+    $sidebarDrawerOpen = false;
   }
 
   function handleSearchKeydown(e: KeyboardEvent) {
@@ -52,11 +60,34 @@
     $theme = newTheme;
     setTheme(newTheme).catch(() => {});
   }
+
+  // Derived collapsed state:
+  // - phone: always expanded inside drawer (collapsed=false)
+  // - tablet: always collapsed (icon rail)
+  // - desktop: follow sidebarCollapsed store
+  let isCollapsedView = $derived(
+    $deviceClass === "tablet" ? true :
+    $deviceClass === "desktop" ? $sidebarCollapsed :
+    false
+  );
 </script>
 
-<nav class="sidebar" class:collapsed={$sidebarCollapsed}>
+<!-- Phone: overlay drawer with backdrop -->
+{#if $deviceClass === "phone"}
+  {#if $sidebarDrawerOpen}
+    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+    <div class="drawer-backdrop" onclick={closeDrawer}></div>
+  {/if}
+{/if}
+
+<nav
+  class="sidebar"
+  class:collapsed={isCollapsedView}
+  class:drawer={$deviceClass === "phone"}
+  class:drawer-open={$deviceClass === "phone" && $sidebarDrawerOpen}
+>
   <!-- Collapsed icon strip -->
-  {#if $sidebarCollapsed}
+  {#if isCollapsedView}
     <div class="collapsed-strip">
       <button class="collapse-toggle" onclick={toggleCollapse} title="Expand sidebar">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></svg>
@@ -120,9 +151,15 @@
       <div class="sidebar-top">
         <div class="brand-row">
           <span class="brand-name">{$t("app.name")}</span>
-          <button class="collapse-toggle" onclick={toggleCollapse} title="Collapse sidebar">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></svg>
-          </button>
+          {#if $deviceClass === "phone"}
+            <button class="collapse-toggle" onclick={closeDrawer} title="Close menu" aria-label="Close menu">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          {:else}
+            <button class="collapse-toggle" onclick={toggleCollapse} title="Collapse sidebar">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></svg>
+            </button>
+          {/if}
         </div>
 
         <!-- Search bar -->
@@ -216,6 +253,33 @@
   .sidebar.collapsed {
     width: 56px;
     min-width: 56px;
+  }
+
+  /* ── Phone drawer mode ─────────────────────────────── */
+
+  .drawer-backdrop {
+    position: fixed;
+    inset: 0;
+    background: var(--overlay-bg);
+    z-index: 299;
+  }
+
+  .sidebar.drawer {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 240px;
+    min-width: 240px;
+    z-index: 300;
+    /* Always show expanded (not icon rail) inside the drawer */
+    transform: translateX(-100%);
+    transition: transform 0.25s ease, width 0.2s ease, min-width 0.2s ease;
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.18);
+  }
+
+  .sidebar.drawer.drawer-open {
+    transform: translateX(0);
   }
 
   /* ── Collapsed strip ────────────────────────────────── */

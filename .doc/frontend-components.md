@@ -1,5 +1,5 @@
 # Frontend Components
-> Last updated: 2026-03-25 (LocalGalleryCard, LocalGalleryDetail, LocalGalleryReader added; library.db separation; is_local routing) | Affects: src/lib/components/
+> Last updated: 2026-03-28 (responsive layout: phone/tablet/desktop adaptation, BottomTabBar, MobileTopBar, drawer sidebar, bottom-sheet detail/filter, reader swipe) | Affects: src/lib/components/, src/routes/+page.svelte, src/lib/stores/ui.ts
 
 ## Design System
 - **Theming:** CSS custom properties on `:root` with `data-theme` attribute (`"light"` | `"dark"`). All colors use `var(--*)` — no hardcoded colors in components.
@@ -8,19 +8,39 @@
 - **Semantic vars:** `--danger-border`, `--danger-bg`, `--success-bg`, `--overlay-bg`, `--scrollbar-thumb`, `--scrollbar-thumb-hover`.
 - **Radii:** `--radius-sm: 8px`, `--radius-md: 10px`, `--radius-lg: 12px`.
 - **Shadows:** `--shadow-sm`, `--shadow-md` (lighter in light theme, darker in dark theme).
-- **Titlebar:** 32px custom titlebar at top of `.app` (replaces native decorations). `--bg-primary` bg, bottom border, `-webkit-app-region: drag`. Contains `WindowControls` (right-aligned). All screens (loading, login, main) sit below it.
+- **Titlebar:** 32px custom titlebar at top of `.app` (replaces native decorations). `--bg-primary` bg, bottom border, `-webkit-app-region: drag`. Contains `WindowControls` (right-aligned). **Desktop/tablet only** — phone uses `MobileTopBar` instead.
 - **Hover:** Cards use shadow lift (sm→md), not background tint. Nav items use subtle accent-subtle bg.
 - **Active nav:** `background: var(--accent-subtle); color: var(--accent)` — not solid colored block.
 - **Pills/badges:** `border-radius: 6px` (tags) or `20px` (category, search badge). No 2px radii.
-- **Inputs:** Focus ring uses `box-shadow: 0 0 0 3px var(--accent-subtle)` + `border-color: var(--accent)`.
+- **Inputs:** Focus ring uses `box-shadow: 0 0 0 3px var(--accent-subtle)` + `border-color: var(--accent)`. On phone, min-height 44px and `font-size: 16px` (prevents iOS zoom).
 - **Typography:** Section headers are small uppercase muted. Body text medium weight dark gray.
-- **Theme toggle:** Sidebar bottom (moon/sun icon), Settings page theme section. Both call `setTheme` IPC to persist.
+- **Theme toggle:** Sidebar bottom (moon/sun icon), MobileTopBar (phone), Settings page theme section. All call `setTheme` IPC to persist.
+- **Responsive breakpoints:** `phone < 600px`, `tablet 600–1023px`, `desktop ≥ 1024px`. Driven by `deviceClass` store in `ui.ts`. Root layout switches between phone stack and sidebar+main layouts.
+- **Touch targets (phone):** All buttons (except thumbnail strip items, preset buttons, scope tabs) enforced `min-height: 44px` via global `@media (max-width: 599px)` rule in `+page.svelte`.
+- **Bottom-sheet pattern:** On phone, GalleryDetail and the filter panel open as bottom sheets (slide up from bottom, `92dvh` / `85dvh`, `border-radius` top corners, `slideUp` animation). On desktop/tablet they remain as right-side panels.
 
 ## Sidebar
 - **Props:** none
-- **Events:** none (uses navigation stores)
+- **Events:** none (uses navigation and ui stores)
 - **Used by:** `+page.svelte`
-- **Notes:** Two modes: collapsed (56px icon strip) and expanded (220px). Expanded has: brand name + collapse toggle, rounded search bar with `/` shortcut badge, nav items grouped under uppercase muted labels ("NAVIGATION", "LIBRARY"). Bottom section: theme toggle (moon/sun icon) + settings, separated by border. Active state: `accent-subtle` bg + `accent` color. Uses `--bg-primary` background.
+- **Notes:** Three modes driven by `deviceClass` store:
+  - **Desktop:** Two states — expanded (220px, brand + search bar + labelled nav) and collapsed (56px icon strip). Toggle button in brand row. `sidebarCollapsed` store persists state.
+  - **Tablet:** Always icon-rail (56px, collapsed strip). `isCollapsedView` computed locally forces collapsed regardless of `sidebarCollapsed` store.
+  - **Phone:** Overlay drawer (240px) — hidden off-screen (`translateX(-100%)`), slides in from left when `sidebarDrawerOpen` store is true. Backdrop `div.drawer-backdrop` (z-299) dims content; clicking it closes the drawer. Always shows expanded content inside the drawer (never icon rail). Close button (×) replaces the collapse toggle in brand row. Navigating to any page closes the drawer automatically.
+- Expanded sidebar: brand name + close/collapse toggle, rounded search bar with `/` shortcut badge, nav items grouped under "NAVIGATION" / "LIBRARY" labels. Bottom section: theme toggle + settings. Active state: `accent-subtle` bg + `accent` color. Uses `--bg-primary` background.
+- **z-index:** drawer backdrop 299, drawer panel 300.
+
+## BottomTabBar
+- **Props:** none
+- **Events:** none (uses navigation + ui stores)
+- **Used by:** `+page.svelte` (phone layout only)
+- **Notes:** Fixed bottom navigation bar for phone. 5 tabs: Home, Search, Favorites, History, Downloads — icons only, no labels. Plus a hamburger button (leftmost, narrower) that opens the sidebar drawer. Height `56px + env(safe-area-inset-bottom)`. Active tab uses `--accent` color. Border-top. All buttons `min-height: 44px`. `-webkit-tap-highlight-color: transparent`.
+
+## MobileTopBar
+- **Props:** none
+- **Events:** none (uses navigation + ui stores)
+- **Used by:** `+page.svelte` (phone layout only)
+- **Notes:** Replaces titlebar + WindowControls on phone. Shows app name (left) + theme toggle + settings icon (right). Height `52px + env(safe-area-inset-top)`. No `-webkit-app-region: drag` (no native window controls on mobile). Settings button navigates to settings page and highlights when active.
 
 ## WindowControls
 - **Props:** none
@@ -32,7 +52,9 @@
 - **Props:** none
 - **Events:** none (uses auth stores)
 - **Used by:** `+page.svelte`
-- **Notes:** Three-field cookie form. Calls `login()` IPC. Centered card with `--bg-primary` bg, `--shadow-md` shadow, `--radius-lg` corners. Input focus uses accent ring. Uses i18n. Wrapper uses `flex: 1` to fill space below titlebar.
+- **IPC:** `open_login_window`, `login`, `cancel_mobile_login`
+- **Events listened:** `webview-login-cookies` (Tauri event — receives cookies from browser login flow)
+- **Notes:** Default mode (`useWebview=true`): single Login button that calls `open_login_window`. Listens for `webview-login-cookies` Tauri event; on receipt calls `login()` to validate and persist cookies. Toggle link at bottom switches to manual cookie mode. Manual mode (`useWebview=false`): three-field form (`ipb_member_id`, `ipb_pass_hash`, `igneous`) calling `login()` directly. Event listener is cleaned up via `onDestroy`. Centered card with `--bg-primary` bg, `--shadow-md` shadow, `--radius-lg` corners. Uses i18n.
 
 ## AuthStatus
 - **Props:** none
@@ -96,6 +118,7 @@
   - **Cancellation:** Tracks `alive` flag. On close/destroy: disconnects all IntersectionObservers, clears `setThumbReadyCallback(null)`. `setActiveDetailGallery(null)` and `detailBatchState.set(null)` only called when reader is NOT open — when reader opens, both are preserved so the reader inherits the active slot and can call `setActiveDetailGallery(gid)` without a race condition. In-flight downloads in the `pageThumbs` service are dropped via gid mismatch when the gallery changes.
   - Action buttons: Read, Download*, Favorite*, Rate*, Search Similar* (*disabled placeholders). Escape: closes entirely in full-page mode (same as back button), closes in panel mode.
   - **z-index:** Collapsed overlay 500, panel 510. Full-page mode: `z-index: auto` (position static). `FavoriteDialog` uses z-index 600/601 to ensure it always renders above the detail panel regardless of mode.
+  - **Phone bottom-sheet mode:** When `deviceClass === "phone"` and not `fullPage`, the panel gets class `bottom-sheet`: `top:auto; bottom:0; left:0; width:100%; height:92dvh; border-radius top corners; slideUp animation`. Overlay backdrop still present. Expand/full-page mode still available on phone — the `.bottom-sheet` class is only added in non-fullPage mode.
 
 ## GalleryReader
 - **Props:** none (uses reader stores)
@@ -108,6 +131,7 @@
 - **Strip sentinel `totalPageCount` discipline:** `fetchStripBatch` updates only `pagesPerBatch` and `showkey` in `detailBatchState` — never `totalPageCount`. This prevents stale spreads from clobbering the authoritative count on round-trips.
 - **Loading indicator (page mode):** Centered arc spinner shown while current page is loading or not yet queued. SVG `<circle>` with `stroke-dasharray: 84.8 28.3` (~270° filled arc, ~90° gap), `stroke: var(--accent)` for filled arc, faint white track. 44px diameter, 4px stroke-width, `stroke-linecap: round`. Rotates continuously via `@keyframes arc-rotate` (`transform: rotate(360deg)` on the SVG). Disappears instantly when image loads (no fade). Scroll mode still uses pulsing `.skeleton-rect.tall` placeholder.
 - **Click zones (page mode):** Viewport divided into 3 horizontal zones covering full viewport height. Left third = prev page, right third = next page, center third = toggle header/toolbar visibility. Zones are invisible (no buttons or borders) — large tap targets. No visible prev/next buttons.
+- **Touch swipe (page mode):** `ontouchstart`/`ontouchend` on `.page-view`. Swipe left (dx < −50px) → next page; swipe right (dx > +50px) → prev page. Ignored if vertical drift > 80px (scroll intent). `touch-action: pan-y` on `.page-view` allows vertical panning while capturing horizontal swipes.
 - **Controls visibility:** Default hidden on open (full immersive view). Center-zone click is the only toggle — no mouse-move trigger, no auto-hide timer. Header and toolbar always show/hide together.
 - **Header/toolbar transitions:** `{#if showControls}` blocks with `transition:slide={{ duration: 200, axis: 'y' }}`. Top bar slides down from top edge; bottom bar slides up from bottom edge.
 - **Bottom toolbar layout:** `flex-direction: column`, padding `0.875rem 1.25rem`, `padding-bottom: max(0.875rem, env(safe-area-inset-bottom))`. Inner structure: (1) `.thumb-strip` — horizontal scrollable preview strip (see below). (2) `.slider-row` — flex row with Slider + `.pct-label`. (3) `.page-label` — centered page counter.
@@ -125,7 +149,7 @@
 ## FilterPanel
 - **Props:** `{ onClose: () => void, onSort?: () => void }`
 - **Used by:** `GalleryGrid.svelte`
-- **Notes:** Client-side hide filter + sort scope UI for the home page. Fields: tags include/exclude, categories (checkbox grid), min rating, pages range, language, uploader. "Apply" commits to `homeFilter` store and calls `onClose`. "Clear" resets `homeFilter` and calls `onClose`. "Sort" commits `homeFilter` + writes `sortScope` store, then calls `onSort` (triggers `handleSort` in GalleryGrid) + `onClose`. Form pre-populated from current stores on mount.
+- **Notes:** Client-side hide filter + sort scope UI for the home page. The containing `.filter-sidebar` in GalleryGrid gets class `bottom-sheet` on phone — slides up from bottom (`85dvh`, rounded top corners, `slideUp` animation) instead of from the right. Fields: tags include/exclude, categories (checkbox grid), min rating, pages range, language, uploader. "Apply" commits to `homeFilter` store and calls `onClose`. "Clear" resets `homeFilter` and calls `onClose`. "Sort" commits `homeFilter` + writes `sortScope` store, then calls `onSort` (triggers `handleSort` in GalleryGrid) + `onClose`. Form pre-populated from current stores on mount.
 - **Sort section (Sorted By):**
   - **Field selector:** dropdown — Date posted / Rating / Page count / Title. Direction toggle (Asc/Desc).
   - **Scope tabs:** "Gallery count" | "Date range" (mutually exclusive).
@@ -148,7 +172,7 @@
 ## SettingsPage
 - **Props:** none
 - **Used by:** `+page.svelte` (settings nav)
-- **Notes:** Left nav + content area. Sections: Account, Theme, Preference, Storage, Network, Downloads, About.
+- **Notes:** Left nav + content area. Sections: Account, Theme, Preference, Storage, Network, Downloads, About. Account section mirrors `LoginForm` login UX: `settingsUseWebview=true` shows browser login button (calls `open_login_window`, listens for `webview-login-cookies`); toggle switches to manual three-field cookie form. Event listener cleaned up via `onDestroy`.
 
 ## HistoryPage
 - **Props:** none

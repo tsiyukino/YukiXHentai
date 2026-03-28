@@ -77,6 +77,7 @@ Tauri does **NOT** convert **struct field names** — they serialize exactly as 
 | ExHentai HTML selectors & page structure | `.doc/facts/exhentai-html-structure.md` |
 | ExHentai cookies & authentication | `.doc/facts/exhentai-auth.md` |
 | All third-party facts (README) | `.doc/facts/README.md` |
+| iOS build strategy & known issues | `.doc/ios-build.md` |
 
 ## Doc file rules
 - One topic per file. Never combine unrelated things.

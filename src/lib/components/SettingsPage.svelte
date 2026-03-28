@@ -4,13 +4,16 @@
   import { t, locale, localeOptions } from "$lib/i18n";
   import type { Locale } from "$lib/i18n";
   import { isLoggedIn, authLoading, authMessage } from "$lib/stores/auth";
-  import { viewMode, cardSize, detailPreviewSize, theme } from "$lib/stores/ui";
-  import type { Theme } from "$lib/stores/ui";
-  import { login, logout } from "$lib/api/auth";
+  import { viewMode, cardSize, detailPreviewSize, theme, deviceClass } from "$lib/stores/ui";
+  import type { Theme, DeviceClass } from "$lib/stores/ui";
+  import { onDestroy } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
+  import { login, openLoginWindow, logout } from "$lib/api/auth";
   import { getDetailPreviewSize, setDetailPreviewSize, getCacheDir, setCacheDir, clearImageCache, setTheme } from "$lib/api/reader";
   import { getReadCacheStats, setReadCacheMaxMb, clearReadCache, getLibraryDir, setLibraryDir, getHistoryRetentionDays, setHistoryRetentionDays, type ReadCacheStats } from "$lib/api/library";
 
-  // Account
+  // Account — webview login (default) + manual cookie toggle
+  let settingsUseWebview = $state(true);
   let ipbMemberId = $state("");
   let ipbPassHash = $state("");
   let igneous = $state("");
@@ -73,6 +76,40 @@
     { id: "downloads", key: "settings.downloads" },
     { id: "about", key: "settings.about" },
   ];
+
+  // Listen for cookies from the login WebView.
+  let settingsUnlisten: (() => void) | null = null;
+  listen<{ ipb_member_id: string; ipb_pass_hash: string; igneous: string }>(
+    "webview-login-cookies",
+    async (event) => {
+      const { ipb_member_id, ipb_pass_hash, igneous } = event.payload;
+      $authLoading = true;
+      $authMessage = "";
+      try {
+        const result = await login(ipb_member_id, ipb_pass_hash, igneous);
+        $authMessage = result.message;
+        if (result.success) $isLoggedIn = true;
+      } catch (err) {
+        $authMessage = `Error: ${err}`;
+      } finally {
+        $authLoading = false;
+      }
+    }
+  ).then((fn) => { settingsUnlisten = fn; });
+
+  onDestroy(() => settingsUnlisten?.());
+
+  async function handleOpenWindow() {
+    $authMessage = "";
+    $authLoading = true;
+    try {
+      await openLoginWindow();
+    } catch (err) {
+      $authMessage = `Error: ${err}`;
+    } finally {
+      $authLoading = false;
+    }
+  }
 
   async function handleLogin(e: Event) {
     e.preventDefault();
@@ -184,36 +221,48 @@
           </div>
         {/if}
 
-        <div class="subsection">
-          <h4>{$t("auth.manual_cookie")}</h4>
-          <form class="cookie-form" onsubmit={handleLogin}>
-            <label class="field">
-              <span>ipb_member_id</span>
-              <input type="text" bind:value={ipbMemberId} placeholder="e.g. 1234567" disabled={$authLoading} />
-            </label>
-            <label class="field">
-              <span>ipb_pass_hash</span>
-              <input type="password" bind:value={ipbPassHash} placeholder="e.g. abc123def456..." disabled={$authLoading} />
-            </label>
-            <label class="field">
-              <span>igneous</span>
-              <input type="password" bind:value={igneous} placeholder="e.g. a1b2c3d4..." disabled={$authLoading} />
-            </label>
-            <button type="submit" class="btn-primary" disabled={$authLoading}>
+        {#if settingsUseWebview}
+          <div class="subsection">
+            <h4>{$t("auth.credentials_title")}</h4>
+            <p class="hint">{$t("auth.credentials_hint")}</p>
+            <button class="btn-primary" onclick={handleOpenWindow} disabled={$authLoading}>
               {$authLoading ? $t("auth.validating") : $t("auth.login")}
             </button>
-          </form>
-          {#if $authMessage}
-            <p class="message" class:error={!$isLoggedIn} class:success={$isLoggedIn}>{$authMessage}</p>
-          {/if}
-        </div>
-
-        <div class="subsection">
-          <button class="btn-outline" disabled>
-            {$t("auth.login_browser")}
-          </button>
-          <p class="hint">{$t("settings.coming_soon")}</p>
-        </div>
+            {#if $authMessage}
+              <p class="message" class:error={!$isLoggedIn} class:success={$isLoggedIn}>{$authMessage}</p>
+            {/if}
+            <button class="btn-switch" onclick={() => { settingsUseWebview = false; $authMessage = ""; }} disabled={$authLoading}>
+              {$t("auth.use_manual_cookies")}
+            </button>
+          </div>
+        {:else}
+          <div class="subsection">
+            <h4>{$t("auth.manual_cookie")}</h4>
+            <form class="cookie-form" onsubmit={handleLogin}>
+              <label class="field">
+                <span>ipb_member_id</span>
+                <input type="text" bind:value={ipbMemberId} placeholder="e.g. 1234567" disabled={$authLoading} />
+              </label>
+              <label class="field">
+                <span>ipb_pass_hash</span>
+                <input type="password" bind:value={ipbPassHash} placeholder="e.g. abc123def456..." disabled={$authLoading} />
+              </label>
+              <label class="field">
+                <span>igneous</span>
+                <input type="password" bind:value={igneous} placeholder="e.g. a1b2c3d4..." disabled={$authLoading} />
+              </label>
+              <button type="submit" class="btn-primary" disabled={$authLoading}>
+                {$authLoading ? $t("auth.validating") : $t("auth.login")}
+              </button>
+            </form>
+            {#if $authMessage}
+              <p class="message" class:error={!$isLoggedIn} class:success={$isLoggedIn}>{$authMessage}</p>
+            {/if}
+            <button class="btn-switch" onclick={() => { settingsUseWebview = true; $authMessage = ""; }} disabled={$authLoading}>
+              {$t("auth.use_credentials")}
+            </button>
+          </div>
+        {/if}
       </div>
 
     {:else if activeSection === "theme"}
@@ -255,11 +304,25 @@
         <div class="field-row">
           <label class="field-label">{$t("settings.layout_preset")}</label>
           <div class="btn-group">
-            <button class:active={true}>{$t("settings.desktop")}</button>
-            <button disabled>{$t("settings.tablet")}</button>
-            <button disabled>{$t("settings.phone")}</button>
+            <button
+              class:active={$deviceClass === "desktop"}
+              onclick={() => deviceClass.set("desktop")}
+            >{$t("settings.desktop")}</button>
+            <button
+              class:active={$deviceClass === "tablet"}
+              onclick={() => deviceClass.set("tablet")}
+            >{$t("settings.tablet")}</button>
+            <button
+              class:active={$deviceClass === "phone"}
+              onclick={() => deviceClass.set("phone")}
+            >{$t("settings.phone")}</button>
           </div>
-          <p class="hint">{$t("settings.coming_soon")}</p>
+          {#if deviceClass.isPinned}
+            <button class="btn-auto" onclick={() => deviceClass.auto()}>
+              {$t("settings.layout_auto")}
+            </button>
+          {/if}
+          <p class="hint">{$t("settings.layout_preset_hint")}</p>
         </div>
       </div>
 
@@ -549,6 +612,29 @@
     gap: 0.7rem;
   }
 
+  .btn-switch {
+    margin-top: 0.25rem;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    transition: color 0.15s;
+    text-align: left;
+  }
+
+  .btn-switch:hover:not(:disabled) {
+    color: var(--text-secondary);
+  }
+
+  .btn-switch:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
   .field {
     display: flex;
     flex-direction: column;
@@ -697,6 +783,24 @@
   .btn-group button:disabled {
     opacity: 0.35;
     cursor: not-allowed;
+  }
+
+  .btn-auto {
+    margin-top: 0.35rem;
+    padding: 0.25rem 0.65rem;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-strong);
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 0.72rem;
+    cursor: pointer;
+    transition: all 0.15s;
+    align-self: flex-start;
+  }
+
+  .btn-auto:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
   }
 
   .slider-row {

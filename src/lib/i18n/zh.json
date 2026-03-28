@@ -21,7 +21,11 @@
     "connected": "已连接",
     "fields_required": "所有三个 Cookie 字段都是必填的。",
     "login_browser": "通过浏览器登录",
-    "manual_cookie": "手动输入 Cookie"
+    "manual_cookie": "手动输入 Cookie",
+    "credentials_title": "账号登录",
+    "credentials_hint": "打开浏览器窗口进行 E-Hentai 登录，登录后自动提取 Cookie。",
+    "use_manual_cookies": "改用手动输入 Cookie",
+    "use_credentials": "改用浏览器登录"
   },
   "gallery": {
     "count": "{count} 个画廊",
@@ -118,6 +122,8 @@
     "card_size": "卡片/列表大小",
     "detail_preview_size": "详情预览尺寸",
     "layout_preset": "布局预设",
+    "layout_preset_hint": "预览不同设备尺寸下的界面效果。",
+    "layout_auto": "恢复自动检测",
     "desktop": "桌面",
     "tablet": "平板",
     "phone": "手机",

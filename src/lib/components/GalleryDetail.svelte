@@ -10,7 +10,7 @@
   import { convertFileSrc } from "@tauri-apps/api/core";
   import { detailGallery, detailPageThumbs, detailBatchState, detailOpenedAsLocal } from "$lib/stores/detail";
   import { readerGallery, readerPage, readerSessionId, readerSourceGallery } from "$lib/stores/reader";
-  import { detailExpanded, detailPreviewSize, libraryRefreshTick } from "$lib/stores/ui";
+  import { detailExpanded, detailPreviewSize, libraryRefreshTick, deviceClass } from "$lib/stores/ui";
   import { thumbSrc } from "$lib/utils/thumb";
   import { categoryColor } from "$lib/utils/category";
   import { onDestroy } from "svelte";
@@ -699,7 +699,12 @@
   {#if !fullPage}
     <div class="detail-overlay" onclick={handleClose} role="presentation"></div>
   {/if}
-  <div class="detail-panel" class:expanded class:full-page={fullPage}>
+  <div
+    class="detail-panel"
+    class:expanded
+    class:full-page={fullPage}
+    class:bottom-sheet={$deviceClass === "phone" && !fullPage}
+  >
     <!-- Top bar -->
     <div class="detail-header">
       <button class="back-btn" onclick={fullPage ? handleCollapse : handleClose}>
@@ -970,6 +975,27 @@
   @keyframes slideIn {
     from { transform: translateX(100%); }
     to { transform: translateX(0); }
+  }
+
+  /* Phone: bottom sheet — slides up from bottom, full width, nearly full height */
+  .detail-panel.bottom-sheet {
+    top: auto;
+    right: 0;
+    left: 0;
+    bottom: 0;
+    width: 100%;
+    max-width: 100%;
+    height: 92dvh;
+    border-left: none;
+    border-top: 1px solid var(--border-strong);
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    box-shadow: 0 -4px 32px var(--overlay-bg);
+    animation: slideUp 0.25s ease;
+  }
+
+  @keyframes slideUp {
+    from { transform: translateY(100%); }
+    to { transform: translateY(0); }
   }
 
   .detail-header {

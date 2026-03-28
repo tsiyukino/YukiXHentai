@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "login-window",
+  "description": "Capability for the E-Hentai login WebviewWindow",
+  "windows": ["exh-login"],
+  "permissions": [
+    "core:default"
+  ]
+}

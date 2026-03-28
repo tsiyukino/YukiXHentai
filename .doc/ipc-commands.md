@@ -1,9 +1,20 @@
 # IPC Commands
-> Last updated: 2026-03-25 (is_local routing for reading progress/session commands; library.db separation; folder naming gid-only) | Affects: src-tauri/src/commands/, src/lib/api/, src/lib/components/
+> Last updated: 2026-03-28 (browser-based login via WebviewWindow/main-webview; cancel_mobile_login) | Affects: src-tauri/src/commands/, src/lib/api/, src/lib/components/
+
+## open_login_window
+- **Signature:** `invoke("open_login_window") -> void`
+- **Notes:** Opens the E-Hentai login page in a real browser context so the user can log in without manually copying cookies. Cloudflare is handled natively by the platform's WebKit/WebView2 engine. After a successful login, injected JS reads `document.cookie` and redirects to a sentinel URL (`https://forums.e-hentai.org/?__exh_cookies__=<urlencoded>`); the Rust side intercepts it, extracts `ipb_member_id`, `ipb_pass_hash`, `igneous`, and emits a `webview-login-cookies` Tauri event. The frontend receives the event and calls `login` to validate and persist the cookies.
+  - **Desktop (Windows/macOS/Linux):** Opens a secondary `WebviewWindowBuilder` popup (label `exh-login`, 900×700). Built with `about:blank` then immediately navigated via `win.navigate()` to avoid Tauri #13967 race condition. `on_navigation` intercepts the sentinel URL, emits event, closes popup.
+  - **Mobile (iOS/Android):** Navigates the main app webview directly to the E-Hentai login page (full-screen takeover). Cookie interception and navigation back to `tauri://localhost` are handled by an `on_page_load` hook registered on the main webview at app startup (in `lib.rs` setup). No secondary window is opened.
+- **Events emitted:** `webview-login-cookies` `{ ipb_member_id: string, ipb_pass_hash: string, igneous: string }`
+
+## cancel_mobile_login
+- **Signature:** `invoke("cancel_mobile_login") -> void`
+- **Notes:** Mobile only (no-op on desktop). Navigates the main webview back to `tauri://localhost`, aborting an in-progress browser login.
 
 ## login
 - **Signature:** `invoke("login", { ipbMemberId, ipbPassHash, igneous }) -> LoginResult`
-- **Notes:** Validates cookies with test request. Persists on success.
+- **Notes:** Validates cookies with test request. Persists on success. Used by: browser login flow (receives cookies from `webview-login-cookies` event) and manual cookie entry fallback.
 
 ## logout
 - **Signature:** `invoke("logout") -> LoginResult`
