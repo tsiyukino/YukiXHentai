@@ -4,5 +4,11 @@
 <dict>
     <key>method</key>
     <string>debugging</string>
+    <key>signingStyle</key>
+    <string>manual</string>
+    <key>signingCertificate</key>
+    <string>-</string>
+    <key>stripSwiftSymbols</key>
+    <true/>
 </dict>
 </plist>

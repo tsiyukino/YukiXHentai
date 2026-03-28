@@ -29,13 +29,33 @@ workflows:
           cd src-tauri/gen/apple
           pod install
 
-      - name: Build IPA (unsigned, for AltStore sideloading)
+      - name: Build app (unsigned)
         script: |
           source $HOME/.cargo/env
-          cargo tauri ios build --export-method debugging
+          export PATH="$HOME/.cargo/bin:$PATH"
+          xcodebuild \
+            -workspace src-tauri/gen/apple/yukixhentai.xcworkspace \
+            -scheme yukixhentai_iOS \
+            -sdk iphoneos \
+            -configuration release \
+            -derivedDataPath /tmp/derived \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Package IPA
+        script: |
+          APP_PATH=$(find /tmp/derived/Build/Products/release-iphoneos -name "*.app" | head -1)
+          mkdir -p /tmp/Payload
+          cp -r "$APP_PATH" /tmp/Payload/
+          cd /tmp
+          zip -r YukiXHentai.ipa Payload
+          mkdir -p $CM_BUILD_DIR/output
+          cp YukiXHentai.ipa $CM_BUILD_DIR/output/
 
     artifacts:
-      - src-tauri/gen/apple/build/arm64/*.ipa
+      - output/*.ipa
 
     publishing:
       email:
