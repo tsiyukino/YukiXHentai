@@ -8,12 +8,6 @@ workflows:
       xcode: latest
       vars:
         BUNDLE_ID: com.yukixhentai.app
-      groups:
-        - ios_signing  # create this group in Codemagic UI with the vars below:
-                       #   IOS_CERTIFICATE         (base64 .p12 file)
-                       #   IOS_CERTIFICATE_PASSWORD (password for .p12)
-                       #   IOS_MOBILE_PROVISION    (base64 .mobileprovision file)
-                       #   KEYCHAIN_PASSWORD        (any random string, e.g. "temppass")
 
     scripts:
       - name: Install Rust stable + iOS targets
@@ -35,31 +29,10 @@ workflows:
           cd src-tauri/gen/apple
           pod install
 
-      - name: Install signing certificate and provisioning profile
-        script: |
-          CERTIFICATE_PATH=$RUNNER_TEMP/cert.p12
-          PP_PATH=$RUNNER_TEMP/profile.mobileprovision
-          KEYCHAIN_PATH=$RUNNER_TEMP/signing.keychain-db
-
-          echo -n "$IOS_CERTIFICATE" | base64 --decode -o $CERTIFICATE_PATH
-          echo -n "$IOS_MOBILE_PROVISION" | base64 --decode -o $PP_PATH
-
-          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
-          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
-          security import $CERTIFICATE_PATH -P "$IOS_CERTIFICATE_PASSWORD" \
-            -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
-          security set-key-partition-list -S apple-tool:,apple: \
-            -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
-          security list-keychain -d user -s $KEYCHAIN_PATH
-
-          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-          cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles/
-
-      - name: Build IPA
+      - name: Build IPA (unsigned, for AltStore sideloading)
         script: |
           source $HOME/.cargo/env
-          cargo tauri ios build --export-method debugging
+          cargo tauri ios build --export-method debugging CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
 
     artifacts:
       - src-tauri/gen/apple/build/arm64/*.ipa
@@ -67,7 +40,7 @@ workflows:
     publishing:
       email:
         recipients:
-          - your@email.com  # replace with your email
+          - tsiyukino@gmail.com
         notify:
           success: true
           failure: true
