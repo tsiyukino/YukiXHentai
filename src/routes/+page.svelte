@@ -199,6 +199,12 @@
     --success-bg: rgba(34, 197, 94, 0.1);
   }
 
+  :global(html),
+  :global(body) {
+    height: 100%;
+    overflow: hidden;
+  }
+
   :global(body) {
     margin: 0;
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -250,9 +256,13 @@
     display: flex;
     flex-direction: column;
     height: 100vh;
+    height: 100dvh;
     /* No min-width — must work on narrow phone screens */
     min-height: 400px;
     overflow: hidden;
+    /* iOS safe areas — top handled per-component, bottom by BottomTabBar */
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
   }
 
   /* Desktop/tablet keep a sensible minimum */

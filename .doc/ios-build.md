@@ -74,6 +74,12 @@ cleaned up after the failed export. The `.xcarchive` is what persists.
 **Fix:** Use `--export-method debugging`. The export will fail anyway (no team), so the
 value doesn't matter much — we just need the build to proceed past compilation.
 
+### `app_handle()` compile error: "private field, not a method"
+**Cause:** `tauri::Manager` trait is not in scope. On iOS (`#[cfg(not(desktop))]`), the
+`use tauri::{webview::PageLoadEvent, Emitter}` import was missing `Manager`.
+`app_handle()` is provided by the `Manager` trait and silently fails to resolve without it.
+**Fix:** Add `Manager` to the import: `use tauri::{webview::PageLoadEvent, Emitter, Manager};`
+
 ### Build phase script panics: missing server addr file
 **Cause:** Tried to call `xcodebuild` directly (bypassing `cargo tauri ios build`).
 The Rust build phase script is a tauri-cli wrapper that expects a dev server addr file
