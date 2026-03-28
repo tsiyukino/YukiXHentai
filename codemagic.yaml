@@ -38,12 +38,14 @@ workflows:
           # the .app will already be built in DerivedData before that point.
           cargo tauri ios build --export-method debugging 2>&1 | tee /tmp/tauri-build.log || true
 
-          # Find the .app in DerivedData (built before export step)
-          APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -path "*/release-iphoneos/*.app" 2>/dev/null | grep -v "\.xctest" | head -1)
+          # Find the .app inside the .xcarchive (persists after failed export)
+          ARCHIVE_PATH=$(find ~/Library/Developer/Xcode/Archives -name "*.xcarchive" 2>/dev/null | head -1)
+          echo "Archive: $ARCHIVE_PATH"
+          APP_PATH=$(find "$ARCHIVE_PATH/Products" -name "*.app" 2>/dev/null | grep -v "\.xctest" | head -1)
 
           if [ -z "$APP_PATH" ]; then
-            echo "ERROR: could not find .app bundle"
-            find ~/Library/Developer/Xcode/DerivedData -name "*.app" 2>/dev/null || true
+            echo "ERROR: could not find .app bundle in archive"
+            find ~/Library/Developer/Xcode/Archives -name "*.app" 2>/dev/null || true
             exit 1
           fi
 
