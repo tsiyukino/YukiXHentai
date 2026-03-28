@@ -5,11 +5,6 @@ platform :ios, '14.0'
   # Pods for yukixhentai_iOS
 end
 
-target 'yukixhentai_macOS' do
-platform :osx, '11.0'
-  # Pods for yukixhentai_macOS
-end
-
 # Delete the deployment target for iOS and macOS, causing it to be inherited from the Podfile
 post_install do |installer|
  installer.pods_project.targets.each do |target|
