@@ -38,20 +38,18 @@ workflows:
           # the .app will already be built in DerivedData before that point.
           cargo tauri ios build --export-method debugging 2>&1 | tee /tmp/tauri-build.log || true
 
-          # Find the .app inside the .xcarchive (persists after failed export)
-          ARCHIVE_PATH=$(find ~/Library/Developer/Xcode/Archives -name "*.xcarchive" 2>/dev/null | head -1)
+          # The .xcarchive is at src-tauri/gen/apple/build/*_iOS.xcarchive
+          ARCHIVE_PATH=$(find src-tauri/gen/apple/build -name "*.xcarchive" 2>/dev/null | head -1)
           echo "Archive: $ARCHIVE_PATH"
-          APP_PATH=$(find "$ARCHIVE_PATH/Products" -name "*.app" 2>/dev/null | grep -v "\.xctest" | head -1)
 
-          if [ -z "$APP_PATH" ]; then
-            echo "ERROR: could not find .app bundle in archive"
-            find ~/Library/Developer/Xcode/Archives -name "*.app" 2>/dev/null || true
+          if [ -z "$ARCHIVE_PATH" ]; then
+            echo "ERROR: no .xcarchive found"
+            ls src-tauri/gen/apple/build/ || true
             exit 1
           fi
 
-          echo "Found app at: $APP_PATH"
-          mkdir -p /tmp/Payload
-          cp -r "$APP_PATH" /tmp/Payload/
+          # An IPA is just a zip of Payload/<App>.app
+          cp -r "$ARCHIVE_PATH/Products/Applications" /tmp/Payload
           cd /tmp
           zip -r YukiXHentai.ipa Payload
           mkdir -p "$CM_BUILD_DIR/output"
