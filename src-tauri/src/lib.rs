@@ -114,6 +114,7 @@ pub fn run() {
     let originals_cache_arc = Arc::new(originals_cache);
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_edge_to_edge::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(config_state)

@@ -36,4 +36,5 @@ dirs = "6"
 url = "2"
 urlencoding = "2"
 tauri-plugin-dialog = "2"
+tauri-plugin-edge-to-edge = "0.3"
 
