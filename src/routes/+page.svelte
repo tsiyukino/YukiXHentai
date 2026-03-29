@@ -233,7 +233,7 @@
 
   /* Phone: enforce minimum touch targets on all interactive elements */
   @media (max-width: 599px) {
-    :global(button:not(.thumb-item):not(.preset-btn):not(.scope-tab)) {
+    :global(button:not(.thumb-item):not(.preset-btn):not(.scope-tab):not(.tag-pill):not(.cat-chip):not(.input-clear):not(.quick-filter-clear):not(.history-clear):not(.advanced-toggle)) {
       min-height: 44px;
     }
     :global(input[type="text"], input[type="number"], input[type="password"]) {

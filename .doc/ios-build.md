@@ -80,6 +80,20 @@ value doesn't matter much — we just need the build to proceed past compilation
 `app_handle()` is provided by the `Manager` trait and silently fails to resolve without it.
 **Fix:** Add `Manager` to the import: `use tauri::{webview::PageLoadEvent, Emitter, Manager};`
 
+### WKWebView does not fill the full physical screen (large black bar at bottom)
+**Cause:** wry initializes WKWebView with a zero frame and sets it as `UIWindow.contentView`
+without explicit layout constraints. iOS constrains it to the safe area layout guide by default,
+leaving a native black gap at the bottom that no CSS (`100vh`, `100dvh`, `-webkit-fill-available`,
+`viewport-fit=cover`) can fix — the webview frame itself is too small.
+**Fix:** Add `tauri-plugin-edge-to-edge` (v0.3) to `src-tauri/Cargo.toml` and register it first
+in `lib.rs`:
+```rust
+.plugin(tauri_plugin_edge_to_edge::init())
+```
+This Swift plugin patches the WKWebView at the native level to fill the full physical screen.
+It also injects `--safe-area-inset-top` / `--safe-area-inset-bottom` CSS variables for
+positioning content away from the Dynamic Island and home indicator.
+
 ### Build phase script panics: missing server addr file
 **Cause:** Tried to call `xcodebuild` directly (bypassing `cargo tauri ios build`).
 The Rust build phase script is a tauri-cli wrapper that expects a dev server addr file

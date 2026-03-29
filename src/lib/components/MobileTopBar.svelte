@@ -40,10 +40,11 @@
 <style>
   .mobile-top-bar {
     display: flex;
-    align-items: center;
+    align-items: flex-end;
     justify-content: space-between;
-    height: 52px;
     padding: 0 16px;
+    padding-top: env(safe-area-inset-top, 0px);
+    height: calc(52px + env(safe-area-inset-top, 0px));
     background: var(--bg-primary);
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;

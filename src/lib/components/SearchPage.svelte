@@ -18,7 +18,7 @@
   } from "$lib/stores/search";
   import type { SearchSortField } from "$lib/stores/search";
   import { detailGallery, detailOpenedAsLocal } from "$lib/stores/detail";
-  import { viewMode, cardSize } from "$lib/stores/ui";
+  import { viewMode, cardSize, isIos } from "$lib/stores/ui";
   import GalleryCard from "./GalleryCard.svelte";
   import GalleryListItem from "./GalleryListItem.svelte";
   import VirtualGrid from "./VirtualGrid.svelte";
@@ -43,6 +43,7 @@
   let inputValue = $state($searchQuery);
   let showAdvanced = $state(false);
   let showHistory = $state(false);
+  let showFilterPanel = $state(false);
   let historyEntries = $state<SearchHistoryEntry[]>([]);
   let progressMap = $state<Map<number, ReadProgress>>(new Map());
   let recheckTrigger = $state(0);
@@ -543,7 +544,7 @@
   <!-- Search header -->
   <div class="search-header">
     <!-- Combined input row: search bar + tag input + search button -->
-    <div class="search-input-row">
+    <div class="search-input-row" class:ios-search-row={$isIos}>
       <!-- Search bar (left, ~60%) -->
       <div class="input-field-wrap search-field-wrap">
         <svg class="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -581,125 +582,364 @@
         {/if}
       </div>
 
-      <!-- Tag input (right, ~40%) -->
-      <div class="tag-field-wrap-outer">
-        <TagInputAutocomplete
-          bind:includeTags={$searchIncludeTags}
-          bind:excludeTags={$searchExcludeTags}
-          onFocus={handleTagInputFocus}
-        />
-      </div>
+      {#if !$isIos}
+        <!-- Tag input (right, ~40%) — desktop/tablet only -->
+        <div class="tag-field-wrap-outer">
+          <TagInputAutocomplete
+            bind:includeTags={$searchIncludeTags}
+            bind:excludeTags={$searchExcludeTags}
+            onFocus={handleTagInputFocus}
+          />
+        </div>
+      {/if}
 
       <button class="search-btn" onclick={() => executeSearch()} disabled={!inputValue.trim() && $searchIncludeTags.length === 0 && $searchExcludeTags.length === 0}>
         {$t("search_page.search_btn")}
       </button>
-    </div>
 
-    <!-- Category chips -->
-    <div class="category-chips">
-      {#each CATEGORIES as cat}
+      {#if $isIos}
+        <!-- iOS: filter panel toggle button -->
         <button
-          class="cat-chip"
-          class:off={!isCategoryEnabled(cat.bit)}
-          onclick={() => toggleCategory(cat.bit)}
+          class="ios-filter-btn"
+          class:ios-filter-btn--active={showFilterPanel || $searchIncludeTags.length > 0 || $searchExcludeTags.length > 0}
+          onclick={() => showFilterPanel = !showFilterPanel}
+          aria-label="Filters"
         >
-          {cat.name}
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="4" y1="6" x2="20" y2="6"/>
+            <line x1="8" y1="12" x2="16" y2="12"/>
+            <line x1="11" y1="18" x2="13" y2="18"/>
+          </svg>
+          {#if $searchIncludeTags.length + $searchExcludeTags.length > 0}
+            <span class="ios-filter-badge">{$searchIncludeTags.length + $searchExcludeTags.length}</span>
+          {/if}
         </button>
-      {/each}
+      {/if}
     </div>
 
-    <!-- Advanced toggle -->
-    <button class="advanced-toggle" onclick={() => showAdvanced = !showAdvanced}>
-      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" class:rotated={showAdvanced}>
-        <path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
-      {$t("search_page.advanced")}
-    </button>
-
-    {#if showAdvanced}
-      <div class="advanced-options">
-        <label class="adv-toggle">
-          <input type="checkbox" checked={$searchAdvancedOptions.search_name} onchange={() => toggleAdvOption("search_name")} />
-          {$t("search_page.search_names")}
-        </label>
-        <label class="adv-toggle">
-          <input type="checkbox" checked={$searchAdvancedOptions.search_tags} onchange={() => toggleAdvOption("search_tags")} />
-          {$t("search_page.search_tags")}
-        </label>
-        <label class="adv-toggle">
-          <input type="checkbox" checked={$searchAdvancedOptions.search_description} onchange={() => toggleAdvOption("search_description")} />
-          {$t("search_page.search_desc")}
-        </label>
-        <label class="adv-toggle">
-          <input type="checkbox" checked={$searchAdvancedOptions.show_expunged} onchange={() => toggleAdvOption("show_expunged")} />
-          {$t("search_page.show_expunged")}
-        </label>
-        <label class="adv-toggle">
-          <input type="checkbox" checked={$searchAdvancedOptions.search_torrent_filenames} onchange={() => toggleAdvOption("search_torrent_filenames")} />
-          Search torrent filenames
-        </label>
-        <label class="adv-toggle">
-          <input type="checkbox" checked={$searchAdvancedOptions.only_with_torrents} onchange={() => toggleAdvOption("only_with_torrents")} />
-          Only with torrents
-        </label>
-        <label class="adv-toggle">
-          <input type="checkbox" checked={$searchAdvancedOptions.search_low_power_tags} onchange={() => toggleAdvOption("search_low_power_tags")} />
-          Search low-power tags
-        </label>
-        <label class="adv-toggle">
-          <input type="checkbox" checked={$searchAdvancedOptions.search_downvoted_tags} onchange={() => toggleAdvOption("search_downvoted_tags")} />
-          Search downvoted tags
-        </label>
-        <div class="adv-row">
-          <label class="adv-label" for="adv-rating">Minimum rating</label>
-          <select
-            id="adv-rating"
-            class="adv-select"
-            value={$searchAdvancedOptions.minimum_rating ?? ""}
-            onchange={(e) => {
-              const v = e.currentTarget.value;
-              setAdvRating(v === "" ? null : parseInt(v));
-            }}
+    {#if !$isIos}
+      <!-- Category chips — desktop/tablet only -->
+      <div class="category-chips">
+        {#each CATEGORIES as cat}
+          <button
+            class="cat-chip"
+            class:off={!isCategoryEnabled(cat.bit)}
+            onclick={() => toggleCategory(cat.bit)}
           >
-            <option value="">Any</option>
-            <option value="2">2★</option>
-            <option value="3">3★</option>
-            <option value="4">4★</option>
-            <option value="5">5★</option>
-          </select>
-        </div>
-        <div class="adv-row">
-          <label class="adv-label">Pages between</label>
-          <input
-            class="adv-pages-input"
-            type="number"
-            min="0"
-            placeholder="min"
-            value={$searchAdvancedOptions.min_pages ?? ""}
-            oninput={(e) => {
-              const v = e.currentTarget.value;
-              setAdvMinPages(v === "" ? null : parseInt(v));
-            }}
-          />
-          <span class="adv-pages-sep">and</span>
-          <input
-            class="adv-pages-input"
-            type="number"
-            min="0"
-            placeholder="max"
-            value={$searchAdvancedOptions.max_pages ?? ""}
-            oninput={(e) => {
-              const v = e.currentTarget.value;
-              setAdvMaxPages(v === "" ? null : parseInt(v));
-            }}
-          />
-        </div>
+            {cat.name}
+          </button>
+        {/each}
       </div>
+
+      <!-- Advanced toggle — desktop/tablet only -->
+      <button class="advanced-toggle" onclick={() => showAdvanced = !showAdvanced}>
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" class:rotated={showAdvanced}>
+          <path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        {$t("search_page.advanced")}
+      </button>
+
+      {#if showAdvanced}
+        <div class="advanced-options">
+          <label class="adv-toggle">
+            <input type="checkbox" checked={$searchAdvancedOptions.search_name} onchange={() => toggleAdvOption("search_name")} />
+            {$t("search_page.search_names")}
+          </label>
+          <label class="adv-toggle">
+            <input type="checkbox" checked={$searchAdvancedOptions.search_tags} onchange={() => toggleAdvOption("search_tags")} />
+            {$t("search_page.search_tags")}
+          </label>
+          <label class="adv-toggle">
+            <input type="checkbox" checked={$searchAdvancedOptions.search_description} onchange={() => toggleAdvOption("search_description")} />
+            {$t("search_page.search_desc")}
+          </label>
+          <label class="adv-toggle">
+            <input type="checkbox" checked={$searchAdvancedOptions.show_expunged} onchange={() => toggleAdvOption("show_expunged")} />
+            {$t("search_page.show_expunged")}
+          </label>
+          <label class="adv-toggle">
+            <input type="checkbox" checked={$searchAdvancedOptions.search_torrent_filenames} onchange={() => toggleAdvOption("search_torrent_filenames")} />
+            Search torrent filenames
+          </label>
+          <label class="adv-toggle">
+            <input type="checkbox" checked={$searchAdvancedOptions.only_with_torrents} onchange={() => toggleAdvOption("only_with_torrents")} />
+            Only with torrents
+          </label>
+          <label class="adv-toggle">
+            <input type="checkbox" checked={$searchAdvancedOptions.search_low_power_tags} onchange={() => toggleAdvOption("search_low_power_tags")} />
+            Search low-power tags
+          </label>
+          <label class="adv-toggle">
+            <input type="checkbox" checked={$searchAdvancedOptions.search_downvoted_tags} onchange={() => toggleAdvOption("search_downvoted_tags")} />
+            Search downvoted tags
+          </label>
+          <div class="adv-row">
+            <label class="adv-label" for="adv-rating">Minimum rating</label>
+            <select
+              id="adv-rating"
+              class="adv-select"
+              value={$searchAdvancedOptions.minimum_rating ?? ""}
+              onchange={(e) => {
+                const v = e.currentTarget.value;
+                setAdvRating(v === "" ? null : parseInt(v));
+              }}
+            >
+              <option value="">Any</option>
+              <option value="2">2★</option>
+              <option value="3">3★</option>
+              <option value="4">4★</option>
+              <option value="5">5★</option>
+            </select>
+          </div>
+          <div class="adv-row">
+            <label class="adv-label">Pages between</label>
+            <input
+              class="adv-pages-input"
+              type="number"
+              min="0"
+              placeholder="min"
+              value={$searchAdvancedOptions.min_pages ?? ""}
+              oninput={(e) => {
+                const v = e.currentTarget.value;
+                setAdvMinPages(v === "" ? null : parseInt(v));
+              }}
+            />
+            <span class="adv-pages-sep">and</span>
+            <input
+              class="adv-pages-input"
+              type="number"
+              min="0"
+              placeholder="max"
+              value={$searchAdvancedOptions.max_pages ?? ""}
+              oninput={(e) => {
+                const v = e.currentTarget.value;
+                setAdvMaxPages(v === "" ? null : parseInt(v));
+              }}
+            />
+          </div>
+        </div>
+      {/if}
     {/if}
   </div>
 
-  <!-- Toolbar -->
-  {#if hasSearched}
+  <!-- iOS filter panel (right slide-in) -->
+  {#if $isIos && showFilterPanel}
+    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+    <div class="ios-panel-backdrop" onclick={() => showFilterPanel = false}></div>
+    <div class="ios-filter-panel">
+      <div class="ios-panel-header">
+        <span class="ios-panel-title">Filters & Sort</span>
+        <button class="ios-panel-close" onclick={() => showFilterPanel = false}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+
+      <div class="ios-panel-body">
+        <!-- Tag input -->
+        <div class="ios-panel-section">
+          <span class="ios-panel-section-label">Tags</span>
+          <TagInputAutocomplete
+            bind:includeTags={$searchIncludeTags}
+            bind:excludeTags={$searchExcludeTags}
+            onFocus={handleTagInputFocus}
+          />
+        </div>
+
+        <!-- Category chips -->
+        <div class="ios-panel-section">
+          <span class="ios-panel-section-label">Categories</span>
+          <div class="category-chips">
+            {#each CATEGORIES as cat}
+              <button
+                class="cat-chip"
+                class:off={!isCategoryEnabled(cat.bit)}
+                onclick={() => toggleCategory(cat.bit)}
+              >
+                {cat.name}
+              </button>
+            {/each}
+          </div>
+        </div>
+
+        <!-- Advanced options -->
+        <div class="ios-panel-section">
+          <button class="advanced-toggle" onclick={() => showAdvanced = !showAdvanced}>
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" class:rotated={showAdvanced}>
+              <path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            {$t("search_page.advanced")}
+          </button>
+          {#if showAdvanced}
+            <div class="advanced-options">
+              <label class="adv-toggle">
+                <input type="checkbox" checked={$searchAdvancedOptions.search_name} onchange={() => toggleAdvOption("search_name")} />
+                {$t("search_page.search_names")}
+              </label>
+              <label class="adv-toggle">
+                <input type="checkbox" checked={$searchAdvancedOptions.search_tags} onchange={() => toggleAdvOption("search_tags")} />
+                {$t("search_page.search_tags")}
+              </label>
+              <label class="adv-toggle">
+                <input type="checkbox" checked={$searchAdvancedOptions.search_description} onchange={() => toggleAdvOption("search_description")} />
+                {$t("search_page.search_desc")}
+              </label>
+              <label class="adv-toggle">
+                <input type="checkbox" checked={$searchAdvancedOptions.show_expunged} onchange={() => toggleAdvOption("show_expunged")} />
+                {$t("search_page.show_expunged")}
+              </label>
+              <label class="adv-toggle">
+                <input type="checkbox" checked={$searchAdvancedOptions.search_torrent_filenames} onchange={() => toggleAdvOption("search_torrent_filenames")} />
+                Search torrent filenames
+              </label>
+              <label class="adv-toggle">
+                <input type="checkbox" checked={$searchAdvancedOptions.only_with_torrents} onchange={() => toggleAdvOption("only_with_torrents")} />
+                Only with torrents
+              </label>
+              <label class="adv-toggle">
+                <input type="checkbox" checked={$searchAdvancedOptions.search_low_power_tags} onchange={() => toggleAdvOption("search_low_power_tags")} />
+                Search low-power tags
+              </label>
+              <label class="adv-toggle">
+                <input type="checkbox" checked={$searchAdvancedOptions.search_downvoted_tags} onchange={() => toggleAdvOption("search_downvoted_tags")} />
+                Search downvoted tags
+              </label>
+              <div class="adv-row">
+                <label class="adv-label" for="adv-rating-ios">Minimum rating</label>
+                <select
+                  id="adv-rating-ios"
+                  class="adv-select"
+                  value={$searchAdvancedOptions.minimum_rating ?? ""}
+                  onchange={(e) => {
+                    const v = e.currentTarget.value;
+                    setAdvRating(v === "" ? null : parseInt(v));
+                  }}
+                >
+                  <option value="">Any</option>
+                  <option value="2">2★</option>
+                  <option value="3">3★</option>
+                  <option value="4">4★</option>
+                  <option value="5">5★</option>
+                </select>
+              </div>
+              <div class="adv-row">
+                <label class="adv-label">Pages between</label>
+                <input
+                  class="adv-pages-input"
+                  type="number"
+                  min="0"
+                  placeholder="min"
+                  value={$searchAdvancedOptions.min_pages ?? ""}
+                  oninput={(e) => {
+                    const v = e.currentTarget.value;
+                    setAdvMinPages(v === "" ? null : parseInt(v));
+                  }}
+                />
+                <span class="adv-pages-sep">and</span>
+                <input
+                  class="adv-pages-input"
+                  type="number"
+                  min="0"
+                  placeholder="max"
+                  value={$searchAdvancedOptions.max_pages ?? ""}
+                  oninput={(e) => {
+                    const v = e.currentTarget.value;
+                    setAdvMaxPages(v === "" ? null : parseInt(v));
+                  }}
+                />
+              </div>
+            </div>
+          {/if}
+        </div>
+
+        <!-- Hide filter -->
+        {#if hasSearched}
+          <div class="ios-panel-section">
+            <span class="ios-panel-section-label">Hide matching</span>
+            <div class="quick-filter-wrap">
+              <svg class="quick-filter-icon" width="14" height="14" viewBox="0 0 16 16" fill="none">
+                <path d="M2 3h12L9 8.5V12l-2 1V8.5L2 3z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+              </svg>
+              <input
+                class="quick-filter-input ios-quick-filter"
+                type="text"
+                placeholder={$t("gallery.hide_filter_placeholder")}
+                value={hideFilterInput}
+                oninput={(e) => onHideFilterInput(e.currentTarget.value)}
+              />
+              {#if hideFilterInput}
+                <button class="quick-filter-clear" onclick={() => onHideFilterInput("")}>
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+                    <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                  </svg>
+                </button>
+              {/if}
+            </div>
+          </div>
+
+          <!-- Sort -->
+          {#if !$searchSortActive}
+            <div class="ios-panel-section">
+              <span class="ios-panel-section-label">Sort</span>
+              <div class="ios-sort-row">
+                <select class="sort-select" bind:value={sortField}>
+                  <option value="posted">Date posted</option>
+                  <option value="rating">Rating</option>
+                  <option value="pages">Page count</option>
+                  <option value="title">Title</option>
+                </select>
+                <button
+                  class="sort-dir-btn"
+                  class:active={sortDir === "desc"}
+                  onclick={() => sortDir = sortDir === "desc" ? "asc" : "desc"}
+                >
+                  {#if sortDir === "desc"}
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+                      <path d="M8 3v10M4 9l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    Desc
+                  {:else}
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+                      <path d="M8 13V3M4 7l4-4 4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    Asc
+                  {/if}
+                </button>
+              </div>
+              <div class="ios-sort-count-row">
+                <div class="sort-preset-row">
+                  {#each [100, 250, 500, 1000] as p}
+                    <button
+                      class="sort-preset-btn"
+                      class:active={sortCount === String(p)}
+                      onclick={() => sortCount = String(p)}
+                    >{p}</button>
+                  {/each}
+                </div>
+                <input
+                  class="sort-count-input"
+                  type="number"
+                  min="1"
+                  placeholder="100"
+                  value={sortCount}
+                  oninput={(e) => sortCount = e.currentTarget.value}
+                />
+                <span class="sort-bar-label">galleries</span>
+                <button class="sort-go-btn" onclick={() => { handleSearchSort(); showFilterPanel = false; }} disabled={$searchResults.length === 0}>
+                  Sort
+                </button>
+              </div>
+            </div>
+          {/if}
+        {/if}
+      </div>
+    </div>
+  {/if}
+
+  <!-- Toolbar (non-iOS only) -->
+  {#if hasSearched && !$isIos}
     <div class="toolbar">
       <div class="toolbar-left">
         {#if debouncedHideFilter.trim()}
@@ -731,7 +971,7 @@
       </div>
     </div>
 
-    <!-- Sort bar -->
+    <!-- Sort bar (non-iOS only) -->
     {#if !$searchSortActive}
       <div class="sort-bar">
         <select class="sort-select" bind:value={sortField}>
@@ -782,6 +1022,19 @@
         </button>
       </div>
     {/if}
+  {/if}
+
+  <!-- iOS: slim toolbar showing count only -->
+  {#if hasSearched && $isIos}
+    <div class="toolbar ios-toolbar">
+      <div class="toolbar-left">
+        {#if debouncedHideFilter.trim()}
+          <span class="count">{$t("gallery.hiding_count", { hidden: $searchResults.length - filteredResults.length, total: $searchResults.length })}</span>
+        {:else}
+          <span class="count">{$searchResults.length} {$t("search_page.results_loaded")}</span>
+        {/if}
+      </div>
+    </div>
   {/if}
 
   <!-- Sort fetch progress overlay -->
@@ -1668,5 +1921,152 @@
   .sort-banner-clear:hover {
     background: var(--accent);
     color: #fff;
+  }
+
+  /* ── iOS filter button ────────────────────────────────────── */
+
+  .ios-filter-btn {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    flex-shrink: 0;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background 0.1s, color 0.1s, border-color 0.1s;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .ios-filter-btn--active {
+    background: var(--accent-subtle);
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+
+  .ios-filter-badge {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #fff;
+    font-size: 0.55rem;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+  }
+
+  /* ── iOS filter panel ────────────────────────────────────── */
+
+  .ios-panel-backdrop {
+    position: fixed;
+    inset: 0;
+    background: var(--overlay-bg);
+    z-index: 299;
+  }
+
+  .ios-filter-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(85vw, 340px);
+    background: var(--bg-primary);
+    border-left: 1px solid var(--border-strong);
+    z-index: 300;
+    display: flex;
+    flex-direction: column;
+    box-shadow: -4px 0 20px rgba(0, 0, 0, 0.15);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  .ios-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 16px 12px;
+    padding-top: calc(16px + env(safe-area-inset-top, 0px));
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  .ios-panel-title {
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+
+  .ios-panel-close {
+    width: 36px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .ios-panel-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .ios-panel-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .ios-panel-section-label {
+    font-size: 0.68rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+  }
+
+  .ios-toolbar {
+    border-bottom: 1px solid var(--border);
+  }
+
+  .ios-sort-row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+  }
+
+  .ios-sort-count-row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+  }
+
+  .ios-quick-filter {
+    width: 100% !important;
+  }
+
+  /* On iOS, history dropdown stays within search bar bounds */
+  .ios-search-row .history-dropdown {
+    right: 0;
   }
 </style>
