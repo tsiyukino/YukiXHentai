@@ -331,6 +331,7 @@
     align-items: center;
     gap: 0.75rem;
     padding: 0.75rem 1.25rem;
+    padding-top: max(0.75rem, env(safe-area-inset-top));
   }
 
   .bottom-bar {
